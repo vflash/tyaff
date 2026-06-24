@@ -37,7 +37,6 @@ function prependAll(parent, nodes) {
     }
 }
 
-// DFS обход — критично для правильного порядка узлов в syncDOMChildren
 function collectDOMNodes(childs) {
     const result = [];
     function walk(node) {
@@ -248,8 +247,8 @@ function attachInstanceAPI(inst) {
                     this._isRendering = false;
                 }
             } else {
-                // memo защитил render — используем старый vnode
-                // Дети всё равно пройдут через свою цепочку благодаря fast path с рекурсией
+                // memo() заблокировал render — используем старый vnode
+                // Дети всё равно пройдут свою цепочку благодаря fast path с рекурсией
                 newVdom = oldVdom;
             }
 
@@ -339,8 +338,7 @@ function attachInstanceAPI(inst) {
         return this.context(key, ...args);
     };
 
-    // Автобиндинг пользовательских методов
-    // Не перезаписываем встроенные методы API
+    // Автобиндинг пользовательских методов — не перезаписываем встроенные
     const reserved = [
         'init', 'render', 'props', 'memo',
         'onMounted', 'onUpdated', 'onUnmounted', 'context',
@@ -357,19 +355,19 @@ function attachInstanceAPI(inst) {
 }
 
 // ----------------------------------------------------------------------------
-// Keys
+// Keys (настоящие Global Keys — уникальные в пределах render)
 // ----------------------------------------------------------------------------
 
 function makeMapKey(vnode, index, path) {
     if (vnode && vnode.props && vnode.props.key !== undefined) {
+        // Пользовательский key — глобальный, БЕЗ индекса позиции
         const userKey = String(vnode.props.key).replace(/,/g, ',,');
-        return '#' + userKey + ',' + index;
+        return '#' + userKey;
     }
+    // Автоматический key — путь от корня
     return path;
 }
 
-// populateKeyMap использует тот же makeMapKey что и mountComponent
-// Это гарантирует корректную работу global keys при перемещении компонентов
 function populateKeyMap(vnode, path, keyMap) {
     if (vnode == null) return;
     if (Array.isArray(vnode)) {
@@ -380,9 +378,27 @@ function populateKeyMap(vnode, path, keyMap) {
     }
     if (vnode._text !== undefined) return;
 
+    // Keyed Fragment — сохраняем instance и рекурсивно обходим детей
+    // с basePath='' (независимо от позиции Fragment в дереве)
+    if (vnode.tag === Fragment) {
+        const hasKey = vnode.props && vnode.props.key !== undefined;
+
+        if (hasKey && vnode._instance) {
+            const key = makeMapKey(vnode, 0, path);
+            keyMap.set(key, vnode._instance);
+        }
+
+        const basePath = hasKey ? '' : path;
+        if (vnode.childs) {
+            for (let i = 0; i < vnode.childs.length; i++) {
+                populateKeyMap(vnode.childs[i], basePath + ',' + i, keyMap);
+            }
+        }
+        return;
+    }
+
     if (vnode._instance) {
-        const index = path.split(',').pop() || 0;
-        const key = makeMapKey(vnode, index, path);
+        const key = makeMapKey(vnode, 0, path);
         keyMap.set(key, vnode._instance);
     }
 
@@ -563,8 +579,7 @@ function callRefs(vnode, seen = new WeakSet()) {
 // Lifecycle
 // ----------------------------------------------------------------------------
 
-// triggerMounted — children-first порядок (как в React)
-// Сначала собираем все компоненты через DFS, потом вызываем onMounted в обратном порядке
+// triggerMounted — children-first (как в React): сначала дети, потом родитель
 function triggerMounted(roots) {
     const components = [];
     const stack = Array.isArray(roots) ? roots.slice() : [roots];
@@ -603,7 +618,7 @@ function triggerMounted(roots) {
         }
     }
 
-    // Вызываем onMounted в обратном порядке (children-first)
+    // Обратный порядок — children-first
     for (let i = components.length - 1; i >= 0; i--) {
         const inst = components[i];
         const d = inst._definition;
@@ -698,6 +713,7 @@ function syncDOMChildren(parentDOM, oldNodes, newNodes) {
 // ----------------------------------------------------------------------------
 
 function reconcile(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace) {
+    // Fast path: один и тот же vnode
     if (oldNode === newNode) {
         if (Array.isArray(newNode)) {
             const nodes = [];
@@ -714,7 +730,6 @@ function reconcile(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace) {
             // Продолжить ниже — reconcileComponent/reconcilePortal
         } else if (newNode && typeof newNode.tag === 'string') {
             // HTML-тег — recurse в детей чтобы компоненты проверили контекст/memo
-            // Это критично когда memo() защитил render родительского компонента
             if (newNode.childs) {
                 for (let i = 0; i < newNode.childs.length; i++) {
                     const child = newNode.childs[i];
@@ -723,11 +738,14 @@ function reconcile(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace) {
             }
             return extractNodes(newNode);
         } else if (newNode && newNode.tag === Fragment) {
-            // Fragment — recurse в _nodes
-            if (newNode._nodes) {
-                for (let i = 0; i < newNode._nodes.length; i++) {
-                    const child = newNode._nodes[i];
-                    reconcile(child, child, parentDOM, ctx, path + ',' + i, keyMap, namespace);
+            // Fragment — recurse в childs с правильным basePath
+            const hasKey = newNode.props && newNode.props.key !== undefined;
+            const basePath = hasKey ? '' : path;
+
+            if (newNode.childs) {
+                for (let i = 0; i < newNode.childs.length; i++) {
+                    const child = newNode.childs[i];
+                    reconcile(child, child, parentDOM, ctx, basePath + ',' + i, keyMap, namespace);
                 }
             }
             return newNode._nodes;
@@ -779,11 +797,7 @@ function reconcile(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace) {
 
     const tag = newNode.tag;
     if (tag === Fragment) {
-        const nodes = reconcileChildren(
-            oldNode.childs, newNode.childs, parentDOM, ctx, path, keyMap, namespace
-        );
-        newNode._nodes = nodes;
-        return nodes;
+        return reconcileFragment(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace);
     }
     if (tag === Portal) {
         return reconcilePortal(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace);
@@ -912,7 +926,7 @@ function buildIncomingProps(rawProps, childs) {
 
 function mountComponent(vnode, parentDOM, ctx, path, keyMap, namespace) {
     const def = vnode.tag._definition;
-    const mapKey = makeMapKey(vnode, path.split(',').pop() || 0, path);
+    const mapKey = makeMapKey(vnode, 0, path);
     let inst = keyMap ? keyMap.get(mapKey) : null;
     if (inst) {
         keyMap.delete(mapKey);
@@ -955,6 +969,72 @@ function reconcileComponent(oldVnode, newVnode, parentDOM, ctx, path, keyMap, na
     inst._namespace = namespace;
     inst._rerender();
     return inst._nodes;
+}
+
+// ----------------------------------------------------------------------------
+// Fragment (с поддержкой key для перемещения между родителями)
+// ----------------------------------------------------------------------------
+
+function mountFragment(vnode, parentDOM, ctx, path, keyMap, namespace) {
+    const hasKey = vnode.props && vnode.props.key !== undefined;
+
+    // Keyed Fragment: ищем в keyMap по глобальному ключу
+    // Это позволяет переносить Fragment между разными родителями
+    if (hasKey && keyMap) {
+        const mapKey = makeMapKey(vnode, 0, path);
+        const oldVnode = keyMap.get(mapKey);
+
+        if (oldVnode && oldVnode.tag === Fragment) {
+            keyMap.delete(mapKey);
+
+            // Дети keyed Fragment имеют пути относительно него ('')
+            // Это позволяет им находить свои instance независимо от позиции Fragment
+            const nodes = reconcileChildren(
+                oldVnode.childs, vnode.childs, parentDOM, ctx,
+                '', keyMap, namespace
+            );
+
+            vnode._nodes = nodes;
+            vnode._instance = oldVnode._instance;
+            return nodes;
+        }
+    }
+
+    // Новый Fragment (keyed или нет)
+    const basePath = hasKey ? '' : path;
+    const nodes = [];
+    for (let i = 0; i < vnode.childs.length; i++) {
+        const childPath = basePath + ',' + i;
+        const r = mountNode(vnode.childs[i], parentDOM, ctx, childPath, keyMap, namespace);
+        pushAll(nodes, r);
+    }
+    vnode._nodes = nodes;
+
+    // Keyed Fragment получает виртуальный instance
+    if (hasKey) {
+        vnode._instance = { _isKeyedFragment: true };
+    }
+
+    return nodes;
+}
+
+function reconcileFragment(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespace) {
+    const hasKey = newVnode.props && newVnode.props.key !== undefined;
+    const basePath = hasKey ? '' : path;
+
+    const nodes = reconcileChildren(
+        oldVnode.childs, newVnode.childs, parentDOM, ctx,
+        basePath, keyMap, namespace
+    );
+
+    newVnode._nodes = nodes;
+
+    // Сохраняем instance для keyed Fragment
+    if (hasKey) {
+        newVnode._instance = oldVnode._instance || { _isKeyedFragment: true };
+    }
+
+    return nodes;
 }
 
 // ----------------------------------------------------------------------------
@@ -1063,14 +1143,7 @@ function mountNode(vnode, parentDOM, ctx, path, keyMap, namespace) {
     }
     const tag = vnode.tag;
     if (tag === Fragment) {
-        const nodes = [];
-        for (let i = 0; i < vnode.childs.length; i++) {
-            const childPath = path + ',' + i;
-            const r = mountNode(vnode.childs[i], parentDOM, ctx, childPath, keyMap, namespace);
-            pushAll(nodes, r);
-        }
-        vnode._nodes = nodes;
-        return nodes;
+        return mountFragment(vnode, parentDOM, ctx, path, keyMap, namespace);
     }
     if (tag === Portal) {
         return mountPortal(vnode, parentDOM, ctx, path, keyMap, namespace);
@@ -1116,7 +1189,6 @@ function collectAllInstances(vnode) {
 
         if (typeof node !== 'object') return;
 
-        // Компонент
         if (typeof node.tag === 'function' && node.tag._definition) {
             if (node._instance && node._instance._rerender) {
                 result.push(node._instance);
@@ -1125,7 +1197,6 @@ function collectAllInstances(vnode) {
             return;
         }
 
-        // Портал
         if (node.tag === Portal) {
             if (node._instance && node._instance._rendered) {
                 walk(node._instance._rendered);
@@ -1133,7 +1204,15 @@ function collectAllInstances(vnode) {
             return;
         }
 
-        // HTML/Fragment — recurse в childs
+        // Keyed Fragment — recurse в _nodes
+        if (node.tag === Fragment) {
+            if (Array.isArray(node._nodes)) {
+                for (const child of node._nodes) walk(child);
+            }
+            return;
+        }
+
+        // HTML/обычный Fragment — recurse в childs
         if (node.childs) {
             for (const child of node.childs) walk(child);
         }
@@ -1157,13 +1236,12 @@ function mount(input, container) {
     // Unmount
     if (vnode === null) {
         if (oldVnode) {
-            // СНАЧАЛА lifecycle (onUnmounted, ref(null)) — DOM ещё доступен (как в React)
+            // СНАЧАЛА lifecycle (onUnmounted, ref(null)) — DOM ещё доступен
             unmountVdom(oldVnode);
 
             // ПОТОМ удаление из DOM (быстро через replaceChildren)
             container.replaceChildren();
 
-            // Cleanup
             mountedTrees.delete(container);
             mountedContainers.delete(container);
         }
@@ -1192,12 +1270,6 @@ function mount(input, container) {
     return vnode;
 }
 
-/**
- * Асинхронно обновляет ВСЕ компоненты во всех смонтированных деревьях.
- * Возвращает Promise<number> с временем выполнения в миллисекундах.
- *
- * Работает даже если корень дерева — HTML-элемент, а не компонент.
- */
 function refresh() {
     const start = performance.now();
 
@@ -1205,7 +1277,6 @@ function refresh() {
         const vnode = mountedTrees.get(container);
         if (!vnode) continue;
 
-        // Собираем ВСЕ instance в дереве (не только корневой)
         const instances = collectAllInstances(vnode);
         for (const inst of instances) {
             try {

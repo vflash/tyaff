@@ -1,3 +1,4 @@
+```markdown
 <center>
   <img src="logo.svg" alt="Логотип" width="220">
 </center>
@@ -5,13 +6,13 @@
 
 ## 📄 Описание библиотеки
 
-# VDOM Library Tyaff
+# tyaff
 
 Легковесная альтернатива React на чистом JavaScript (ES6+) с собственным виртуальным DOM и философией минимализма. Библиотека отходит от каноничной модели React там, где она кажется избыточной: вместо иммутабельности — прямая мутация состояния, вместо Provider/Consumer — прозрачный pull-based контекст, вместо чёрного ящика мемоизации — явные массивы зависимостей с точечным контролем над рендером.
 
 **Ключевые отличия от React:**
 
-- **`memo()` блокирует только текущий компонент** — принимает массив зависимостей и пропускает `render()` только для себя. Дочерние компоненты продолжают свою цепочку обновлений независимо, что делает оптимизацию предсказуемой и не ломает работу контекста.
+- **`memo()` блокирует только текущий компонент** — принимает массив зависимостей и не выполняет `render()` только для себя. Дочерние компоненты продолжают свою цепочку обновлений независимо, что делает оптимизацию предсказуемой и не ломает работу контекста.
 
 - **Мутабельные данные из любых источников** — компонент может читать глобальный store, singleton или `window` напрямую, без props drilling. Данные живут там, где им удобно, а компонент просто их потребляет.
 
@@ -19,14 +20,16 @@
 
 - **Props первым аргументом** — сигнатуры `init(props)`, `memo(props)`, `render({ title, items })` позволяют деструктурировать props прямо в определении, делая код декларативным и компактным.
 
+- **Ключи уникальны в пределах всего render** (а не только среди братьев, как в React) — это позволяет перемещать компоненты между разными родителями с сохранением instance и state.
+
 
 ## Основные возможности
 
 ### 🎯 Компактный и производительный
 - Минимальный размер API
 - Собственный diff/patch алгоритм
-- Делегирование событий для оптимизации
 - Кеширование refs и обработчиков
+- Batching обновлений через microtask
 
 ### 🔄 Динамическое дерево контекстов
 - Иерархическая система провайдеров
@@ -42,15 +45,20 @@
 
 ### 🚪 Порталы с отложенным монтированием
 - Монтирование в произвольный DOM-контейнер
-- Якорные комментарии для стабильности
+- Якорные текстовые узлы для стабильности
 - Отложенная активация при появлении контейнера
 - Автоматическая очистка при unmount
 
-### 🔑 Система глобальных ключей
-- Сохранение инстансов при перемещении
+### 🔑 Система ключей (отличие от React)
+- Пользовательские ключи уникальны в пределах всего render
+- Сохранение instance при перемещении между разными родителями
 - Автоматические ключи на основе пути
-- Пользовательские ключи с экранированием
-- Map-based хранение инстансов
+- Экранирование специальных символов
+
+### 🧩 Fragment с key
+- Группировка детей без обёртки (без key)
+- Виртуальный instance для перемещения групп (с key)
+- Сохранение состояния детей при перемещении группы
 
 ### 📦 Защита структуры детей
 - Сохранение вложенности массивов
@@ -58,12 +66,13 @@
 - Предотвращение сдвига индексов
 - Стабильная идентификация элементов
 
+
 ## Установка
 
 ```javascript
-import { h, Component, createPortal, Fragment, mount, refresh } from './vdom-library.js';
-
+import { h, Component, createPortal, Fragment, mount, refresh } from './core.js';
 ```
+
 
 ## Публичный API
 
@@ -71,9 +80,9 @@ import { h, Component, createPortal, Fragment, mount, refresh } from './vdom-lib
 Создание VDOM узла.
 
 **Параметры:**
-- `type` - строка (HTML-тег), функция (компонент) или Symbol (Fragment/Portal)
-- `props` - объект свойств (может быть null)
-- `children` - дочерние элементы
+- `type` — строка (HTML-тег), функция (компонент) или Symbol (Fragment/Portal)
+- `props` — объект свойств (может быть `null`)
+- `children` — дочерние элементы
 
 **Возвращает:** VDOM объект `{ tag, props, childs }`
 
@@ -89,16 +98,18 @@ h('div', { className: 'container' },
 Фабрика для создания компонентов.
 
 **Параметры:**
-- `definition` - объект с lifecycle методами, свойствами и пользовательскими методами
+- `definition` — объект с lifecycle методами, свойствами и пользовательскими методами
 
-**Возвращает:** Конструктор компонента
+**Возвращает:** Конструктор компонента (с маркером `_definition`)
 
 **Структура definition:**
 ```javascript
 {
-  // Lifecycle методы (НЕ биндятся автоматически)
-  init(),
-  render(),
+  name: 'MyComponent',  // опционально, для логов ошибок
+
+  // Lifecycle методы
+  init(props),
+  render(props),
   props(incoming),
   memo(props),
   onMounted(),
@@ -123,8 +134,8 @@ h('div', { className: 'container' },
 Создание портала для монтирования в произвольный DOM-контейнер.
 
 **Параметры:**
-- `children` - VDOM дети
-- `containerGetter` - функция, возвращающая DOM-элемент или null
+- `children` — VDOM дети
+- `containerGetter` — функция, возвращающая DOM-элемент или `null`
 
 **Возвращает:** VDOM узел с `tag: Symbol(Portal)`
 
@@ -137,68 +148,118 @@ createPortal(
 ```
 
 ### Fragment
-Symbol для создания фрагментов без обёртки.
+Symbol для создания фрагментов. Поддерживает `key` prop для перемещения групп детей.
 
-**Пример:**
+**Примеры:**
 ```javascript
+// Простая группировка без overhead
 h(Fragment, null,
   h('li', null, 'Item 1'),
   h('li', null, 'Item 2')
 )
+
+// Группа с key — можно перемещать, дети сохраняют instance
+h(Fragment, { key: 'group-a' },
+  h(Item, { key: 'i1' }),
+  h(Item, { key: 'i2' })
+)
 ```
 
-### mount(vnode, parentDOM)
-Первоначальный монтаж VDOM дерева в DOM.
+### mount(input, container)
+**Универсальная функция** — единая точка входа для mount, update и unmount.
 
-**Параметры:**
-- `vnode` - корневой VDOM узел
-- `parentDOM` - родительский DOM-элемент
+**Поведение:**
+- **Первый вызов** с vnode → создаёт DOM и вставляет в container
+- **Повторный вызов** с vnode → выполняет diff, применяет изменения к существующему DOM
+- **Вызов с `null`** → размонтирует дерево (выполняется `onUnmounted`, `ref(null)`)
 
-**Возвращает:** Массив смонтированных DOM-узлов
+**Поддерживаемые типы `input`:**
+- **vnode** (объект с `tag`, `props`, `childs`)
+- **Конструктор компонента** — оборачивается в `h(Component, {})`
+- **Массив vnode** — оборачивается в `h(Fragment, {}, ...array)`
+- **Строка/число** — оборачивается в текстовый узел
+- **`null`/`undefined`** — размонтирует дерево
 
-### patch(oldVnode, newVnode, parentDOM)
-Обновление VDOM дерева (diff/patch).
+**Примеры:**
+```javascript
+// Первый mount
+mount(App, container);
+mount(h(App, { theme: 'dark' }), container);
 
-**Параметры:**
-- `oldVnode` - предыдущее VDOM дерево
-- `newVnode` - новое VDOM дерево
-- `parentDOM` - родительский DOM-элемент
+// Массив
+mount([h('div', null, 'A'), h('div', null, 'B')], container);
 
-**Возвращает:** Обновлённый VDOM
+// Текст
+mount('Hello World', container);
 
-### unmount(vnode)
-Удаление VDOM дерева и вызов lifecycle методов.
+// Update
+mount(h(App, { theme: 'light' }), container);
 
-**Параметры:**
-- `vnode` - VDOM дерево для удаления
+// Unmount
+mount(null, container);
+```
+
+**Ограничения:**
+- Один контейнер = одно дерево
+- `onMounted()` выполняется только при первом mount
+
+### refresh()
+Глобальное асинхронное обновление всех примонтированных деревьев.
+
+**Сигнатура:**
+```javascript
+const time = await refresh();  // Promise<number> — время в миллисекундах
+```
+
+**Поведение:**
+- Находит все корневые компоненты
+- Выполняет `update()` у каждого
+- Возвращает `Promise`, который разрешается после завершения всех обновлений
+
+**Use cases:**
+- Измерение производительности рендера
+- Интеграция с глобальным state (store, singleton)
+- Async тесты
+- Профилирование slow renders
+
+**Пример:**
+```javascript
+store.items = processData(bigData);
+const time = await refresh();
+console.log(`Render: ${time.toFixed(2)}ms`);
+if (time > 16) console.warn('Slow render');
+```
+
 
 ## Архитектура
 
 ### Виртуальный DOM
 - Плоские объекты с `tag`, `props`, `childs`
 - Сохранение вложенной структуры массивов
-- Нормализация детей (null для falsy значений)
+- Текстовые узлы оборачиваются в объекты `{ _text: '...' }`
+- `null` в VDOM игнорируется при диффе
 
 ### Diff алгоритм
 - Сравнение по `tag` и `key`
 - Точечное обновление атрибутов
 - Рекурсивная обработка детей
-- Глобальные ключи для сохранения инстансов
-
-### Event Delegation
-- Один глобальный слушатель на тип события
-- WeakMap для хранения обработчиков
-- Автоматическая очистка при unmount
-- Поддержка всплытия событий
+- Ключи для сохранения instance при перемещении
 
 ### Lifecycle
-- `init()` - инициализация (один раз)
-- `props(incoming)` - нормализация пропсов
-- `memo(props)` - зависимости для оптимизации
-- `render()` - возврат VDOM
-- `onMounted()` - после вставки в DOM
-- `onUpdated()` - после обновления DOM
-- `onUnmounted()` - перед удалением
+- `init(props)` — инициализация (один раз при создании instance)
+- `props(incoming)` — нормализация пропсов (чистая функция)
+- `memo(props)` — массив зависимостей для оптимизации
+- `render(props)` — возврат VDOM
+- `onMounted()` — после вставки в DOM
+- `onUpdated()` — после обновления DOM (только если render выполнен)
+- `onUnmounted()` — перед удалением
+
+### Update Engine
+- Batching через microtask — множественные `update()` объединяются в один render
+- Защита от рекурсии и бесконечных циклов (лимит 50 итераций)
+- Изоляция ошибок — падающий компонент не ломает другие
+- `memo()` блокирует только текущий компонент, дети продолжают цепочку
+
 
 ## Обработка атрибутов
 
@@ -212,9 +273,18 @@ h(Fragment, null,
 
 ### SVG-атрибуты
 ```javascript
-// camelCase остаются camelCase
-{ viewBox: '0 0 100 100' }
-{ xlinkHref: '#icon' }   // → xlink:href="#icon"
+// camelCase остаются camelCase или конвертируются
+{ viewBox: '0 0 100 100' }           // → viewBox
+{ xlinkHref: '#icon' }               // → xlink:href (через setAttributeNS)
+{ preserveAspectRatio: 'xMidYMid' }  // → preserveAspectRatio
+```
+
+### Контролируемые формы
+```javascript
+// Используются DOM property, а не атрибуты
+{ value: 'text' }       // → element.value
+{ checked: true }       // → element.checked
+{ selected: true }      // → element.selected
 ```
 
 ### Специальные атрибуты
@@ -234,31 +304,38 @@ h(Fragment, null,
 }
 ```
 
+
 ## Производительность
 
 ### Оптимизации
-- **Делегирование событий** - один слушатель вместо тысяч
-- **WeakMap** - автоматическая очистка памяти
-- **Кеширование refs** - одна функция на имя
-- **Batch операции** - `prepend()` для массовой вставки
-- **Memoization** - пропуск ненужных ререндеров
+- **Batching обновлений** — множественные `update()` в одной задаче объединяются
+- **WeakMap** — автоматическая очистка памяти при удалении контейнеров
+- **Кеширование refs** — одна функция на имя
+- **Batch-вставка** — `prepend()` с чанками по 20 000 для больших деревьев
+- **memo()** — блокировка ненужных ререндеров
 
 ### Рекомендации
 - Используйте `memo()` для оптимизации компонентов
+- Включайте контекстные значения в `memo()`, если компонент их использует
 - Избегайте создания объектов в `render()`
 - Используйте ключи для списков
 - Минимизируйте вложенность компонентов
+
 
 ## Совместимость
 
 - ES6+ (ES2015 и выше)
 - Современные браузеры
-- WeakMap, Symbol, Array.from
+- `WeakMap`, `Symbol`, `Promise`, `Array.from`
 - Без внешних зависимостей
+
 
 ## Лицензия
 
 MIT
+
+
+---
 
 
 # Примеры использования
@@ -266,82 +343,70 @@ MIT
 ## 1. Простой компонент
 
 ```javascript
-import VDOM from './vdom-library.js';
-const { h, Component, mount } = VDOM;
+import { h, Component, mount } from './core.js';
 
 const HelloWorld = Component({
-  render() {
-    return h('div', { className: 'hello' },
-      h('h1', null, 'Привет, мир!'),
-      h('p', null, 'Это VDOM библиотека')
-    );
-  }
+    render() {
+        return h('div', { className: 'hello' },
+            h('h1', null, 'Привет, мир!'),
+            h('p', null, 'Это tyaff')
+        );
+    }
 });
 
 // Монтаж в DOM
-mount(h(HelloWorld, null), document.body);
+mount(HelloWorld, document.body);
 ```
 
 ## 2. Компонент с состоянием
 
 ```javascript
 const Counter = Component({
-  // Пользовательское свойство
-  count: 0,
+    count: 0,
 
-  // Пользовательский метод (автобиндинг)
-  increment() {
-    this.update({ count: this.count + 1 });
-  },
+    increment() {
+        this.update({ count: this.count + 1 });
+    },
 
-  decrement() {
-    this.update({ count: this.count - 1 });
-  },
+    decrement() {
+        this.update({ count: this.count - 1 });
+    },
 
-  render() {
-    return h('div', null,
-      h('span', null, 'Счётчик: ' + this.count),
-      h('button', { onClick: this.decrement }, '-'),
-      h('button', { onClick: this.increment }, '+')
-    );
-  }
+    render() {
+        return h('div', null,
+            h('span', null, 'Счётчик: ' + this.count),
+            h('button', { onClick: this.decrement }, '-'),
+            h('button', { onClick: this.increment }, '+')
+        );
+    }
 });
 
-mount(h(Counter, null), document.getElementById('app'));
+mount(Counter, document.getElementById('app'));
 ```
 
-## 3. Пропсы и нормализация
+## 3. Props первым аргументом
 
 ```javascript
 const Button = Component({
-  // Нормализация пропсов
-  props(incoming) {
-    return {
-      label: incoming.label || 'Нажми меня',
-      type: incoming.type || 'button',
-      disabled: incoming.disabled || false
-    };
-  },
+    // Нормализация пропсов
+    props(incoming) {
+        const { label, type = 'button', disabled = false, onClick } = incoming;
+        return { label, type, disabled, onClick };
+    },
 
-  render() {
-    return h('button',
-      {
-        type: this.props.type,
-        disabled: this.props.disabled,
-        onClick: this.props.onClick
-      },
-      this.props.label
-    );
-  }
+    // Деструктуризация прямо в сигнатуре
+    render({ label, type, disabled, onClick }) {
+        return h('button', { type, disabled, onClick }, label);
+    }
 });
 
 // Использование
 mount(
-  h(Button, {
-    label: 'Отправить',
-    onClick: () => alert('Клик!')
-  }),
-  document.body
+    h(Button, {
+        label: 'Отправить',
+        onClick: () => alert('Клик!')
+    }),
+    document.body
 );
 ```
 
@@ -349,63 +414,63 @@ mount(
 
 ```javascript
 const Timer = Component({
-  count: 0,
-  intervalId: null,
+    count: 0,
+    intervalId: null,
 
-  init() {
-    console.log('Инициализация компонента');
-    this.intervalId = setInterval(() => {
-      this.update({ count: this.count + 1 });
-    }, 1000);
-  },
+    init(props) {
+        console.log('Инициализация компонента');
+        this.intervalId = setInterval(() => {
+            this.update({ count: this.count + 1 });
+        }, 1000);
+    },
 
-  onMounted() {
-    console.log('Компонент смонтирован');
-    console.log('DOM доступен');
-  },
+    onMounted() {
+        console.log('Компонент смонтирован, DOM доступен');
+    },
 
-  onUpdated() {
-    console.log('Компонент обновлён:', this.count);
-  },
+    onUpdated() {
+        console.log('Компонент обновлён:', this.count);
+    },
 
-  onUnmounted() {
-    console.log('Компонент будет удалён');
-    clearInterval(this.intervalId);
-  },
+    onUnmounted() {
+        console.log('Компонент будет удалён');
+        clearInterval(this.intervalId);
+    },
 
-  render() {
-    return h('div', null, 'Таймер: ' + this.count);
-  }
+    render() {
+        return h('div', null, 'Таймер: ' + this.count);
+    }
 });
 ```
 
-## 5. Memoization для оптимизации
+## 5. memo() для оптимизации
 
 ```javascript
 const ExpensiveComponent = Component({
-  props(incoming) {
-    return {
-      data: incoming.data || [],
-      multiplier: incoming.multiplier || 1
-    };
-  },
+    props(incoming) {
+        return {
+            data: incoming.data || [],
+            multiplier: incoming.multiplier || 1
+        };
+    },
 
-  // Зависимости для мемоизации
-  memo(props) {
-    return [props.data.length, props.multiplier];
-  },
+    // Зависимости для мемоизации
+    memo(props) {
+        return [props.data.length, props.multiplier];
+    },
 
-  render() {
-    console.log('Render вызван');
-    const result = this.props.data.reduce((sum, item) =>
-      sum + item * this.props.multiplier, 0
-    );
+    render(props) {
+        console.log('render() выполняется');
+        const result = props.data.reduce((sum, item) =>
+            sum + item * props.multiplier, 0
+        );
 
-    return h('div', null, 'Результат: ' + result);
-  }
+        return h('div', null, 'Результат: ' + result);
+    }
 });
 
-// Render будет вызван только при изменении длины массива или multiplier
+// render() выполняется только при изменении длины массива или multiplier
+// Если зависимости совпадают — render() блокируется
 ```
 
 ## 6. Context (провайдеры)
@@ -413,52 +478,48 @@ const ExpensiveComponent = Component({
 ```javascript
 // Провайдер темы
 const ThemeProvider = Component({
-  context: {
-    theme() {
-      return this.props.theme || 'light';
+    theme: 'light',
+
+    context: {
+        theme() { return this.theme; },
+        toggleTheme() {
+            this.theme = this.theme === 'light' ? 'dark' : 'light';
+            this.update();
+        }
     },
 
-    toggleTheme() {
-      const current = this.props.theme || 'light';
-      const newTheme = current === 'light' ? 'dark' : 'light';
-      this.update({ theme: newTheme });
+    render() {
+        return h('div', { className: 'theme-provider' },
+            h('button',
+                { onClick: () => this.contextSelf('toggleTheme') },
+                'Переключить тему'
+            ),
+            this.props.children
+        );
     }
-  },
-
-  theme: 'light',
-
-  render() {
-    return h('div', { className: 'theme-provider' },
-      h('button', { onClick: () => this.contextSelf('toggleTheme') },
-        'Переключить тему'
-      ),
-      this.props.children
-    );
-  }
 });
 
 // Потребитель темы
 const ThemedButton = Component({
-  render() {
-    // Получаем тему от родителя
-    const theme = this.context('theme');
+    memo(props) {
+        // ✅ Включаем контекст в зависимости
+        return [this.context('theme')];
+    },
 
-    return h('button',
-      {
-        className: 'btn-' + theme,
-        onClick: this.props.onClick
-      },
-      this.props.children
-    );
-  }
+    render() {
+        const theme = this.context('theme');
+        return h('button',
+            { className: 'btn-' + theme },
+            this.props.children
+        );
+    }
 });
 
-// Использование
 mount(
-  h(ThemeProvider, { theme: 'dark' },
-    h(ThemedButton, null, 'Кнопка с темой')
-  ),
-  document.body
+    h(ThemeProvider, null,
+        h(ThemedButton, null, 'Кнопка с темой')
+    ),
+    document.body
 );
 ```
 
@@ -466,72 +527,78 @@ mount(
 
 ```javascript
 const UserProvider = Component({
-  context: {
-    user() {
-      return this.props.user || null;
+    context: {
+        user() { return this.props.user || null; },
+        isAdmin() {
+            const user = this.context('user');
+            return user && user.role === 'admin';
+        }
     },
 
-    isAdmin() {
-      const user = this.context('user');
-      return user && user.role === 'admin';
+    render() {
+        return h('div', null, this.props.children);
     }
-  },
-
-  render() {
-    return h('div', null, this.props.children);
-  }
 });
 
 const AdminPanel = Component({
-  render() {
-    // Проверяем через contextSelf (сначала свой context, потом родитель)
-    const isAdmin = this.contextSelf('isAdmin');
+    render() {
+        const isAdmin = this.contextSelf('isAdmin');
 
-    if (!isAdmin) {
-      return h('div', null, 'Доступ запрещён');
+        if (!isAdmin) {
+            return h('div', null, 'Доступ запрещён');
+        }
+
+        return h('div', { className: 'admin-panel' }, 'Админ-панель');
     }
-
-    return h('div', { className: 'admin-panel' },
-      'Админ-панель'
-    );
-  }
 });
 
 mount(
-  h(UserProvider, { user: { name: 'John', role: 'admin' } },
-    h(AdminPanel, null)
-  ),
-  document.body
+    h(UserProvider, { user: { name: 'John', role: 'admin' } },
+        h(AdminPanel, null)
+    ),
+    document.body
 );
 ```
 
-## 8. Refs (ссылки на DOM)
+## 8. Refs (ссылки на DOM и компоненты)
 
 ```javascript
 const InputFocus = Component({
-  onMounted() {
-    // DOM доступен после монтирования
-    if (this.refs.input) {
-      this.refs.input.focus();
-    }
-  },
+    onMounted() {
+        // DOM доступен после монтирования
+        if (this.refs.input) {
+            this.refs.input.focus();
+        }
+    },
 
-  handleClick() {
-    if (this.refs.input) {
-      this.refs.input.select();
-    }
-  },
+    handleClick() {
+        if (this.refs.input) {
+            this.refs.input.select();
+        }
+    },
 
-  render() {
-    return h('div', null,
-      h('input', {
-        ref: this.refs('input'),
-        type: 'text',
-        defaultValue: 'Кликни для выделения'
-      }),
-      h('button', { onClick: this.handleClick }, 'Выделить')
-    );
-  }
+    render() {
+        return h('div', null,
+            h('input', {
+                ref: this.refs('input'),
+                type: 'text',
+                value: 'Кликни для выделения',
+                readOnly: true
+            }),
+            h('button', { onClick: this.handleClick }, 'Выделить')
+        );
+    }
+});
+
+// Ref на компонент
+const Parent = Component({
+    onMounted() {
+        this.refs.child.someMethod();  // вызов метода дочернего компонента
+    },
+
+    render() {
+        return h(Child, { ref: this.refs('child') });
+    }
 });
 ```
 
@@ -539,46 +606,39 @@ const InputFocus = Component({
 
 ```javascript
 const Modal = Component({
-  render() {
-    if (!this.props.visible) return null;
+    render() {
+        if (!this.props.visible) return null;
 
-    return createPortal(
-      h('div', { className: 'modal-overlay' },
-        h('div', { className: 'modal-content' },
-          h('h2', null, this.props.title),
-          h('p', null, this.props.children),
-          h('button',
-            { onClick: this.props.onClose },
-            'Закрыть'
-          )
-        )
-      ),
-      () => document.getElementById('modal-root')
-    );
-  }
+        return createPortal(
+            h('div', { className: 'modal-overlay' },
+                h('div', { className: 'modal-content' },
+                    h('h2', null, this.props.title),
+                    h('p', null, this.props.children),
+                    h('button', { onClick: this.props.onClose }, 'Закрыть')
+                )
+            ),
+            () => document.getElementById('modal-root')
+        );
+    }
 });
 
-// HTML
-// <div id="app"></div>
-// <div id="modal-root"></div>
-
 const App = Component({
-  showModal: false,
+    showModal: false,
 
-  toggleModal() {
-    this.update({ showModal: !this.showModal });
-  },
+    toggleModal() {
+        this.update({ showModal: !this.showModal });
+    },
 
-  render() {
-    return h('div', null,
-      h('button', { onClick: this.toggleModal }, 'Открыть модал'),
-      h(Modal, {
-        visible: this.showModal,
-        title: 'Привет!',
-        onClose: this.toggleModal
-      }, 'Содержимое модального окна')
-    );
-  }
+    render() {
+        return h('div', null,
+            h('button', { onClick: this.toggleModal }, 'Открыть модал'),
+            h(Modal, {
+                visible: this.showModal,
+                title: 'Привет!',
+                onClose: this.toggleModal
+            }, 'Содержимое модального окна')
+        );
+    }
 });
 ```
 
@@ -586,419 +646,391 @@ const App = Component({
 
 ```javascript
 const TodoList = Component({
-  todos: [
-    { id: 1, text: 'Изучить VDOM', done: false },
-    { id: 2, text: 'Создать проект', done: false },
-    { id: 3, text: 'Написать тесты', done: false }
-  ],
+    todos: [
+        { id: 1, text: 'Изучить tyaff', done: false },
+        { id: 2, text: 'Создать проект', done: false },
+        { id: 3, text: 'Написать тесты', done: false }
+    ],
 
-  toggleTodo(id) {
-    this.update({
-      todos: this.todos.map(todo =>
-        todo.id === id ? { ...todo, done: !todo.done } : todo
-      )
-    });
-  },
+    toggleTodo(id) {
+        this.update({
+            todos: this.todos.map(todo =>
+                todo.id === id ? { ...todo, done: !todo.done } : todo
+            )
+        });
+    },
 
-  render() {
-    return h('ul', null,
-      this.todos.map(todo =>
-        h('li',
-          {
-            key: todo.id,  // Ключ для стабильной идентификации
-            onClick: () => this.toggleTodo(todo.id),
-            style: {
-              textDecoration: todo.done ? 'line-through' : 'none'
-            }
-          },
-          todo.text
-        )
-      )
-    );
-  }
+    render() {
+        return h('ul', null,
+            this.todos.map(todo =>
+                h('li',
+                    {
+                        key: todo.id,  // пользовательский ключ
+                        onClick: () => this.toggleTodo(todo.id),
+                        style: {
+                            textDecoration: todo.done ? 'line-through' : 'none'
+                        }
+                    },
+                    todo.text
+                )
+            )
+        );
+    }
 });
 ```
 
-## 11. Fragment (группировка без обёртки)
+## 11. Fragment
 
 ```javascript
+// Простая группировка без обёртки
 const TableRows = Component({
-  render() {
-    return h(Fragment, null,
-      h('tr', null,
-        h('td', null, 'Ячейка 1'),
-        h('td', null, 'Ячейка 2')
-      ),
-      h('tr', null,
-        h('td', null, 'Ячейка 3'),
-        h('td', null, 'Ячейка 4')
-      )
-    );
-  }
+    render() {
+        return h(Fragment, null,
+            h('tr', null,
+                h('td', null, 'Ячейка 1'),
+                h('td', null, 'Ячейка 2')
+            ),
+            h('tr', null,
+                h('td', null, 'Ячейка 3'),
+                h('td', null, 'Ячейка 4')
+            )
+        );
+    }
 });
 
-// Использование в таблице
-mount(
-  h('table', null,
-    h('tbody', null,
-      h(TableRows, null)
-    )
-  ),
-  document.body
-);
+// Fragment с key — можно перемещать группу
+const Tabs = Component({
+    activeTab: 'a',
+
+    switchTab(tab) {
+        this.update({ activeTab: tab });
+    },
+
+    render() {
+        return h('div', null,
+            this.activeTab === 'a'
+                ? h(Fragment, { key: 'group-a' },
+                    h(Item, { key: 'i1' }),
+                    h(Item, { key: 'i2' })
+                )
+                : h(Fragment, { key: 'group-b' },
+                    h(Item, { key: 'i3' }),
+                    h(Item, { key: 'i4' })
+                )
+        );
+    }
+});
 ```
 
 ## 12. Условный рендеринг
 
 ```javascript
 const ConditionalRender = Component({
-  showDetails: false,
+    showDetails: false,
 
-  toggle() {
-    this.update({ showDetails: !this.showDetails });
-  },
+    toggle() {
+        this.update({ showDetails: !this.showDetails });
+    },
 
-  render() {
-    return h('div', null,
-      h('button', { onClick: this.toggle }, 'Показать детали'),
+    render() {
+        return h('div', null,
+            h('button', { onClick: this.toggle }, 'Показать детали'),
 
-      // Условный рендеринг
-      this.showDetails ?
-        h('div', { className: 'details' },
-          h('p', null, 'Это детализированная информация'),
-          h('p', null, 'Здесь больше контента')
-        ) :
-        null
-    );
-  }
+            this.showDetails
+                ? h('div', { className: 'details' },
+                    h('p', null, 'Это детализированная информация'),
+                    h('p', null, 'Здесь больше контента')
+                )
+                : null
+        );
+    }
 });
 ```
 
-## 13. Обработка событий с аргументами
-
-```javascript
-const ItemList = Component({
-  items: ['Яблоко', 'Банан', 'Апельсин'],
-
-  handleItemClick(item, index, event) {
-    console.log('Клик на:', item, 'индекс:', index, 'событие:', event);
-  },
-
-  render() {
-    return h('ul', null,
-      this.items.map((item, index) =>
-        h('li',
-          {
-            key: index,
-            onClick: (e) => this.handleItemClick(item, index, e)
-          },
-          item
-        )
-      )
-    );
-  }
-});
-```
-
-## 14. Формы с контролируемым вводом
+## 13. Контролируемые формы
 
 ```javascript
 const Form = Component({
-  formData: {
-    name: '',
-    email: ''
-  },
+    formData: { name: '', email: '' },
 
-  handleChange(field, value) {
-    this.update({
-      formData: {
-        ...this.formData,
-        [field]: value
-      }
-    });
-  },
+    handleChange(field, value) {
+        this.update({
+            formData: { ...this.formData, [field]: value }
+        });
+    },
 
-  handleSubmit(e) {
-    e.preventDefault();
-    console.log('Отправлено:', this.formData);
-  },
+    handleSubmit(e) {
+        e.preventDefault();
+        console.log('Отправлено:', this.formData);
+    },
 
-  render() {
-    return h('form', { onSubmit: this.handleSubmit },
-      h('div', null,
-        h('label', null, 'Имя:'),
-        h('input', {
-          type: 'text',
-          value: this.formData.name,
-          onChange: (e) => this.handleChange('name', e.target.value)
-        })
-      ),
-      h('div', null,
-        h('label', null, 'Email:'),
-        h('input', {
-          type: 'email',
-          value: this.formData.email,
-          onChange: (e) => this.handleChange('email', e.target.value)
-        })
-      ),
-      h('button', { type: 'submit' }, 'Отправить')
-    );
-  }
+    render() {
+        return h('form', { onSubmit: this.handleSubmit },
+            h('div', null,
+                h('label', null, 'Имя:'),
+                h('input', {
+                    type: 'text',
+                    value: this.formData.name,
+                    onChange: (e) => this.handleChange('name', e.target.value)
+                })
+            ),
+            h('div', null,
+                h('label', null, 'Email:'),
+                h('input', {
+                    type: 'email',
+                    value: this.formData.email,
+                    onChange: (e) => this.handleChange('email', e.target.value)
+                })
+            ),
+            h('button', { type: 'submit' }, 'Отправить')
+        );
+    }
 });
 ```
 
-## 15. SVG компоненты
+## 14. SVG компоненты
 
 ```javascript
 const Icon = Component({
-  render() {
-    return h('svg',
-      {
-        viewBox: '0 0 24 24',
-        width: 24,
-        height: 24,
-        fill: this.props.color || 'currentColor'
-      },
-      h('path', {
-        d: 'M12 2L2 22h20L12 2z'
-      })
-    );
-  }
+    render({ color = 'currentColor' }) {
+        return h('svg',
+            {
+                viewBox: '0 0 24 24',
+                width: 24,
+                height: 24,
+                fill: color
+            },
+            h('path', {
+                d: 'M12 2L2 22h20L12 2z'
+            })
+        );
+    }
 });
 
 const Button = Component({
-  render() {
-    return h('button', { className: 'btn' },
-      h(Icon, { color: 'blue' }),
-      this.props.children
-    );
-  }
+    render() {
+        return h('button', { className: 'btn' },
+            h(Icon, { color: 'blue' }),
+            this.props.children
+        );
+    }
 });
 ```
 
-## 16. Анимации и transitions
+## 15. Global Store Pattern
+
+```javascript
+// store.js
+export const store = { count: 0, user: null };
+
+// App.js
+import { h, Component, mount, refresh } from './core.js';
+import { store } from './store.js';
+
+const Counter = Component({
+    render() {
+        return h('div', null, 'Count: ', store.count);
+    }
+});
+
+const UserProfile = Component({
+    render() {
+        return store.user
+            ? h('div', null, 'User: ', store.user.name)
+            : h('div', null, 'Not logged in');
+    }
+});
+
+mount(
+    h('div', null,
+        h(Counter),
+        h(UserProfile)
+    ),
+    document.getElementById('app')
+);
+
+// Внешнее обновление
+async function updateCount() {
+    store.count = 55;
+    await refresh();  // явный trigger, все компоненты перечитают store
+}
+```
+
+## 16. Анимации через style
 
 ```javascript
 const AnimatedBox = Component({
-  visible: true,
+    visible: true,
 
-  toggle() {
-    this.update({ visible: !this.visible });
-  },
+    toggle() {
+        this.update({ visible: !this.visible });
+    },
 
-  render() {
-    return h('div', null,
-      h('button', { onClick: this.toggle }, 'Переключить'),
-      h('div', {
-        style: {
-          opacity: this.visible ? 1 : 0,
-          transition: 'opacity 0.3s ease',
-          width: '100px',
-          height: '100px',
-          backgroundColor: 'blue'
-        }
-      })
-    );
-  }
+    render() {
+        return h('div', null,
+            h('button', { onClick: this.toggle }, 'Переключить'),
+            h('div', {
+                style: {
+                    opacity: this.visible ? 1 : 0,
+                    transition: 'opacity 0.3s ease',
+                    width: '100px',
+                    height: '100px',
+                    backgroundColor: 'blue'
+                }
+            })
+        );
+    }
 });
 ```
 
-## 17. Вложенные компоненты
-
-```javascript
-const Card = Component({
-  render() {
-    return h('div', { className: 'card' },
-      h('h3', null, this.props.title),
-      h('div', { className: 'card-body' },
-        this.props.children
-      )
-    );
-  }
-});
-
-const App = Component({
-  render() {
-    return h('div', { className: 'container' },
-      h(Card, { title: 'Карточка 1' },
-        h('p', null, 'Содержимое первой карточки'),
-        h('button', null, 'Действие')
-      ),
-      h(Card, { title: 'Карточка 2' },
-        h('p', null, 'Содержимое второй карточки')
-      )
-    );
-  }
-});
-```
-
-## 18. Динамическое обновление
-
-```javascript
-const DynamicList = Component({
-  items: [],
-
-  init() {
-    this.update({ items: ['Item 1'] });
-  },
-
-  addItem() {
-    this.update({
-      items: [...this.items, 'Item ' + (this.items.length + 1)]
-    });
-  },
-
-  removeItem(index) {
-    this.update({
-      items: this.items.filter((_, i) => i !== index)
-    });
-  },
-
-  render() {
-    return h('div', null,
-      h('button', { onClick: this.addItem }, 'Добавить'),
-      h('ul', null,
-        this.items.map((item, index) =>
-          h('li', { key: index },
-            h('span', null, item),
-            h('button',
-              { onClick: () => this.removeItem(index) },
-              'Удалить'
-            )
-          )
-        )
-      )
-    );
-  }
-});
-```
-
-## 19. dangerouslySetInnerHTML
+## 17. dangerouslySetInnerHTML
 
 ```javascript
 const HTMLContent = Component({
-  render() {
-    const htmlString = '<strong>Жирный</strong> и <em>курсив</em>';
-
-    return h('div', {
-      dangerouslySetInnerHTML: {
-        __html: htmlString
-      }
-    });
-  }
+    render() {
+        const htmlString = '<strong>Жирный</strong> и <em>курсив</em>';
+        return h('div', {
+            dangerouslySetInnerHTML: { __html: htmlString }
+        });
+    }
 });
 ```
 
-## 20. Обновление всего приложения
+## 18. Измерение производительности через refresh()
 
 ```javascript
-let currentVnode = null;
+async function loadData() {
+    const bigData = await fetch('/api/data').then(r => r.json());
+    store.items = processData(bigData);
 
+    const time = await refresh();
+    console.log(`Render time: ${time.toFixed(2)}ms`);
+
+    if (time > 16) {
+        console.warn('Slow render detected');
+    }
+}
+```
+
+## 19. Тестирование с refresh()
+
+```javascript
+test('renders user name after store update', async () => {
+    mount(UserProfile, container);
+
+    store.user = { name: 'Alice' };
+    await refresh();
+
+    expect(container.textContent).toContain('Alice');
+});
+```
+
+## 20. Update через mount()
+
+```javascript
 const App = Component({
-  count: 0,
-
-  increment() {
-    this.update({ count: this.count + 1 });
-  },
-
-  render() {
-    return h('div', null,
-      h('h1', null, 'Счётчик: ' + this.count),
-      h('button', { onClick: this.increment }, '+')
-    );
-  }
+    count: 0,
+    increment() { this.update({ count: this.count + 1 }); },
+    render() {
+        return h('div', null,
+            h('h1', null, 'Счётчик: ' + this.count),
+            h('button', { onClick: this.increment }, '+')
+        );
+    }
 });
 
-// Первоначальный монтаж
-currentVnode = h(App, null);
-mount(currentVnode, document.getElementById('app'));
+// Первоначальный mount
+mount(App, document.getElementById('app'));
 
-// При необходимости обновить всё приложение
-// const newVnode = h(App, null);
-// currentVnode = patch(currentVnode, newVnode, document.getElementById('app'));
+// При повторном вызове mount() с тем же контейнером
+// выполняется diff и обновление существующего дерева
+mount(h(App, { initialCount: 10 }), document.getElementById('app'));
+
+// Unmount
+mount(null, document.getElementById('app'));
 ```
+
 
 ## Полноценный пример: Todo приложение
 
 ```javascript
 const TodoApp = Component({
-  todos: [],
-  inputValue: '',
+    todos: [],
+    inputValue: '',
 
-  addTodo() {
-    if (!this.inputValue.trim()) return;
+    addTodo() {
+        if (!this.inputValue.trim()) return;
 
-    this.update({
-      todos: [...this.todos, {
-        id: Date.now(),
-        text: this.inputValue,
-        completed: false
-      }],
-      inputValue: ''
-    });
-  },
+        this.update({
+            todos: [...this.todos, {
+                id: Date.now(),
+                text: this.inputValue,
+                completed: false
+            }],
+            inputValue: ''
+        });
+    },
 
-  toggleTodo(id) {
-    this.update({
-      todos: this.todos.map(todo =>
-        todo.id === id
-          ? { ...todo, completed: !todo.completed }
-          : todo
-      )
-    });
-  },
-
-  deleteTodo(id) {
-    this.update({
-      todos: this.todos.filter(todo => todo.id !== id)
-    });
-  },
-
-  render() {
-    return h('div', { className: 'todo-app' },
-      h('h1', null, 'Todo список'),
-
-      h('div', { className: 'todo-input' },
-        h('input', {
-          type: 'text',
-          value: this.inputValue,
-          onChange: (e) => this.update({ inputValue: e.target.value }),
-          onKeyPress: (e) => e.key === 'Enter' && this.addTodo()
-        }),
-        h('button', { onClick: this.addTodo }, 'Добавить')
-      ),
-
-      h('ul', { className: 'todo-list' },
-        this.todos.map(todo =>
-          h('li', {
-            key: todo.id,
-            className: todo.completed ? 'completed' : ''
-          },
-            h('input', {
-              type: 'checkbox',
-              checked: todo.completed,
-              onChange: () => this.toggleTodo(todo.id)
-            }),
-            h('span', null, todo.text),
-            h('button',
-              { onClick: () => this.deleteTodo(todo.id) },
-              'Удалить'
+    toggleTodo(id) {
+        this.update({
+            todos: this.todos.map(todo =>
+                todo.id === id
+                    ? { ...todo, completed: !todo.completed }
+                    : todo
             )
-          )
-        )
-      ),
+        });
+    },
 
-      h('div', { className: 'todo-stats' },
-        'Всего: ' + this.todos.length + ', ',
-        'Выполнено: ' + this.todos.filter(t => t.completed).length
-      )
-    );
-  }
+    deleteTodo(id) {
+        this.update({
+            todos: this.todos.filter(todo => todo.id !== id)
+        });
+    },
+
+    render() {
+        return h('div', { className: 'todo-app' },
+            h('h1', null, 'Todo список'),
+
+            h('div', { className: 'todo-input' },
+                h('input', {
+                    type: 'text',
+                    value: this.inputValue,
+                    onChange: (e) => this.update({ inputValue: e.target.value }),
+                    onKeyPress: (e) => e.key === 'Enter' && this.addTodo()
+                }),
+                h('button', { onClick: this.addTodo }, 'Добавить')
+            ),
+
+            h('ul', { className: 'todo-list' },
+                this.todos.map(todo =>
+                    h('li', {
+                        key: todo.id,
+                        className: todo.completed ? 'completed' : ''
+                    },
+                        h('input', {
+                            type: 'checkbox',
+                            checked: todo.completed,
+                            onChange: () => this.toggleTodo(todo.id)
+                        }),
+                        h('span', null, todo.text),
+                        h('button',
+                            { onClick: () => this.deleteTodo(todo.id) },
+                            'Удалить'
+                        )
+                    )
+                )
+            ),
+
+            h('div', { className: 'todo-stats' },
+                'Всего: ' + this.todos.length + ', ',
+                'Выполнено: ' + this.todos.filter(t => t.completed).length
+            )
+        );
+    }
 });
 
-// Запуск приложения
-mount(h(TodoApp, null), document.getElementById('app'));
+mount(TodoApp, document.getElementById('app'));
 ```
 
-Эти примеры демонстрируют основные возможности библиотеки и могут быть использованы как основа для ваших проектов.
-
+Эти примеры демонстрируют основные возможности библиотеки tyaff и могут быть использованы как основа для ваших проектов.
+```
