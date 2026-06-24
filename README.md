@@ -1,7 +1,12 @@
-## 📄 README.md - Описание библиотеки
+<center>
+  <img src="logo.svg" alt="Логотип" width="220">
+</center>
 
-```markdown
-# VDOM Library
+
+## 📄 Описание библиотеки
+
+# VDOM Library Tyaff
+
 
 Легковесная альтернатива React на чистом JavaScript (ES6+) с собственным виртуальным DOM, diff/patch алгоритмом и уникальными возможностями.
 
@@ -46,9 +51,8 @@
 ## Установка
 
 ```javascript
-import VDOM from './vdom-library.js';
+import { h, Component, createPortal, Fragment, mount, refresh } from './vdom-library.js';
 
-const { h, Component, createPortal, Fragment, mount, patch, unmount } = VDOM;
 ```
 
 ## Публичный API
@@ -90,15 +94,15 @@ h('div', { className: 'container' },
   onMounted(),
   onUpdated(),
   onUnmounted(),
-  
+
   // Объект контекста
   context: {
     theme() { return 'light'; }
   },
-  
+
   // Пользовательские методы (АВТОМАТИЧЕСКИ биндятся)
   increment() { this.count++; },
-  
+
   // Пользовательские свойства (копируются на инстанс)
   count: 0,
   config: { theme: 'dark' }
@@ -205,7 +209,7 @@ h(Fragment, null,
 
 ### Специальные атрибуты
 ```javascript
-{ 
+{
   style: { fontSize: '16px' },
   dangerouslySetInnerHTML: { __html: '<b>Bold</b>' },
   ref: this.refs('element')
@@ -214,9 +218,9 @@ h(Fragment, null,
 
 ### События
 ```javascript
-{ 
+{
   onClick: (e) => console.log(e),
-  onChange: this.handleChange 
+  onChange: this.handleChange
 }
 ```
 
@@ -245,13 +249,8 @@ h(Fragment, null,
 ## Лицензия
 
 MIT
-```
 
----
 
-## 📄 EXAMPLES.md - Примеры использования
-
-```markdown
 # Примеры использования
 
 ## 1. Простой компонент
@@ -279,16 +278,16 @@ mount(h(HelloWorld, null), document.body);
 const Counter = Component({
   // Пользовательское свойство
   count: 0,
-  
+
   // Пользовательский метод (автобиндинг)
   increment() {
     this.update({ count: this.count + 1 });
   },
-  
+
   decrement() {
     this.update({ count: this.count - 1 });
   },
-  
+
   render() {
     return h('div', null,
       h('span', null, 'Счётчик: ' + this.count),
@@ -313,10 +312,10 @@ const Button = Component({
       disabled: incoming.disabled || false
     };
   },
-  
+
   render() {
-    return h('button', 
-      { 
+    return h('button',
+      {
         type: this.props.type,
         disabled: this.props.disabled,
         onClick: this.props.onClick
@@ -328,7 +327,7 @@ const Button = Component({
 
 // Использование
 mount(
-  h(Button, { 
+  h(Button, {
     label: 'Отправить',
     onClick: () => alert('Клик!')
   }),
@@ -342,28 +341,28 @@ mount(
 const Timer = Component({
   count: 0,
   intervalId: null,
-  
+
   init() {
     console.log('Инициализация компонента');
     this.intervalId = setInterval(() => {
       this.update({ count: this.count + 1 });
     }, 1000);
   },
-  
+
   onMounted() {
     console.log('Компонент смонтирован');
     console.log('DOM доступен');
   },
-  
+
   onUpdated() {
     console.log('Компонент обновлён:', this.count);
   },
-  
+
   onUnmounted() {
     console.log('Компонент будет удалён');
     clearInterval(this.intervalId);
   },
-  
+
   render() {
     return h('div', null, 'Таймер: ' + this.count);
   }
@@ -380,18 +379,18 @@ const ExpensiveComponent = Component({
       multiplier: incoming.multiplier || 1
     };
   },
-  
+
   // Зависимости для мемоизации
   memo(props) {
     return [props.data.length, props.multiplier];
   },
-  
+
   render() {
     console.log('Render вызван');
-    const result = this.props.data.reduce((sum, item) => 
+    const result = this.props.data.reduce((sum, item) =>
       sum + item * this.props.multiplier, 0
     );
-    
+
     return h('div', null, 'Результат: ' + result);
   }
 });
@@ -408,16 +407,16 @@ const ThemeProvider = Component({
     theme() {
       return this.props.theme || 'light';
     },
-    
+
     toggleTheme() {
       const current = this.props.theme || 'light';
       const newTheme = current === 'light' ? 'dark' : 'light';
       this.update({ theme: newTheme });
     }
   },
-  
+
   theme: 'light',
-  
+
   render() {
     return h('div', { className: 'theme-provider' },
       h('button', { onClick: () => this.contextSelf('toggleTheme') },
@@ -433,9 +432,9 @@ const ThemedButton = Component({
   render() {
     // Получаем тему от родителя
     const theme = this.context('theme');
-    
-    return h('button', 
-      { 
+
+    return h('button',
+      {
         className: 'btn-' + theme,
         onClick: this.props.onClick
       },
@@ -461,13 +460,13 @@ const UserProvider = Component({
     user() {
       return this.props.user || null;
     },
-    
+
     isAdmin() {
       const user = this.context('user');
       return user && user.role === 'admin';
     }
   },
-  
+
   render() {
     return h('div', null, this.props.children);
   }
@@ -477,11 +476,11 @@ const AdminPanel = Component({
   render() {
     // Проверяем через contextSelf (сначала свой context, потом родитель)
     const isAdmin = this.contextSelf('isAdmin');
-    
+
     if (!isAdmin) {
       return h('div', null, 'Доступ запрещён');
     }
-    
+
     return h('div', { className: 'admin-panel' },
       'Админ-панель'
     );
@@ -506,16 +505,16 @@ const InputFocus = Component({
       this.refs.input.focus();
     }
   },
-  
+
   handleClick() {
     if (this.refs.input) {
       this.refs.input.select();
     }
   },
-  
+
   render() {
     return h('div', null,
-      h('input', { 
+      h('input', {
         ref: this.refs('input'),
         type: 'text',
         defaultValue: 'Кликни для выделения'
@@ -532,13 +531,13 @@ const InputFocus = Component({
 const Modal = Component({
   render() {
     if (!this.props.visible) return null;
-    
+
     return createPortal(
       h('div', { className: 'modal-overlay' },
         h('div', { className: 'modal-content' },
           h('h2', null, this.props.title),
           h('p', null, this.props.children),
-          h('button', 
+          h('button',
             { onClick: this.props.onClose },
             'Закрыть'
           )
@@ -555,11 +554,11 @@ const Modal = Component({
 
 const App = Component({
   showModal: false,
-  
+
   toggleModal() {
     this.update({ showModal: !this.showModal });
   },
-  
+
   render() {
     return h('div', null,
       h('button', { onClick: this.toggleModal }, 'Открыть модал'),
@@ -582,7 +581,7 @@ const TodoList = Component({
     { id: 2, text: 'Создать проект', done: false },
     { id: 3, text: 'Написать тесты', done: false }
   ],
-  
+
   toggleTodo(id) {
     this.update({
       todos: this.todos.map(todo =>
@@ -590,15 +589,15 @@ const TodoList = Component({
       )
     });
   },
-  
+
   render() {
     return h('ul', null,
       this.todos.map(todo =>
-        h('li', 
-          { 
+        h('li',
+          {
             key: todo.id,  // Ключ для стабильной идентификации
             onClick: () => this.toggleTodo(todo.id),
-            style: { 
+            style: {
               textDecoration: todo.done ? 'line-through' : 'none'
             }
           },
@@ -644,21 +643,21 @@ mount(
 ```javascript
 const ConditionalRender = Component({
   showDetails: false,
-  
+
   toggle() {
     this.update({ showDetails: !this.showDetails });
   },
-  
+
   render() {
     return h('div', null,
       h('button', { onClick: this.toggle }, 'Показать детали'),
-      
+
       // Условный рендеринг
-      this.showDetails ? 
+      this.showDetails ?
         h('div', { className: 'details' },
           h('p', null, 'Это детализированная информация'),
           h('p', null, 'Здесь больше контента')
-        ) : 
+        ) :
         null
     );
   }
@@ -670,16 +669,16 @@ const ConditionalRender = Component({
 ```javascript
 const ItemList = Component({
   items: ['Яблоко', 'Банан', 'Апельсин'],
-  
+
   handleItemClick(item, index, event) {
     console.log('Клик на:', item, 'индекс:', index, 'событие:', event);
   },
-  
+
   render() {
     return h('ul', null,
       this.items.map((item, index) =>
-        h('li', 
-          { 
+        h('li',
+          {
             key: index,
             onClick: (e) => this.handleItemClick(item, index, e)
           },
@@ -699,7 +698,7 @@ const Form = Component({
     name: '',
     email: ''
   },
-  
+
   handleChange(field, value) {
     this.update({
       formData: {
@@ -708,12 +707,12 @@ const Form = Component({
       }
     });
   },
-  
+
   handleSubmit(e) {
     e.preventDefault();
     console.log('Отправлено:', this.formData);
   },
-  
+
   render() {
     return h('form', { onSubmit: this.handleSubmit },
       h('div', null,
@@ -743,14 +742,14 @@ const Form = Component({
 ```javascript
 const Icon = Component({
   render() {
-    return h('svg', 
-      { 
+    return h('svg',
+      {
         viewBox: '0 0 24 24',
         width: 24,
         height: 24,
         fill: this.props.color || 'currentColor'
       },
-      h('path', { 
+      h('path', {
         d: 'M12 2L2 22h20L12 2z'
       })
     );
@@ -772,11 +771,11 @@ const Button = Component({
 ```javascript
 const AnimatedBox = Component({
   visible: true,
-  
+
   toggle() {
     this.update({ visible: !this.visible });
   },
-  
+
   render() {
     return h('div', null,
       h('button', { onClick: this.toggle }, 'Переключить'),
@@ -828,23 +827,23 @@ const App = Component({
 ```javascript
 const DynamicList = Component({
   items: [],
-  
+
   init() {
     this.update({ items: ['Item 1'] });
   },
-  
+
   addItem() {
     this.update({
       items: [...this.items, 'Item ' + (this.items.length + 1)]
     });
   },
-  
+
   removeItem(index) {
     this.update({
       items: this.items.filter((_, i) => i !== index)
     });
   },
-  
+
   render() {
     return h('div', null,
       h('button', { onClick: this.addItem }, 'Добавить'),
@@ -852,7 +851,7 @@ const DynamicList = Component({
         this.items.map((item, index) =>
           h('li', { key: index },
             h('span', null, item),
-            h('button', 
+            h('button',
               { onClick: () => this.removeItem(index) },
               'Удалить'
             )
@@ -870,7 +869,7 @@ const DynamicList = Component({
 const HTMLContent = Component({
   render() {
     const htmlString = '<strong>Жирный</strong> и <em>курсив</em>';
-    
+
     return h('div', {
       dangerouslySetInnerHTML: {
         __html: htmlString
@@ -887,11 +886,11 @@ let currentVnode = null;
 
 const App = Component({
   count: 0,
-  
+
   increment() {
     this.update({ count: this.count + 1 });
   },
-  
+
   render() {
     return h('div', null,
       h('h1', null, 'Счётчик: ' + this.count),
@@ -915,10 +914,10 @@ mount(currentVnode, document.getElementById('app'));
 const TodoApp = Component({
   todos: [],
   inputValue: '',
-  
+
   addTodo() {
     if (!this.inputValue.trim()) return;
-    
+
     this.update({
       todos: [...this.todos, {
         id: Date.now(),
@@ -928,27 +927,27 @@ const TodoApp = Component({
       inputValue: ''
     });
   },
-  
+
   toggleTodo(id) {
     this.update({
       todos: this.todos.map(todo =>
-        todo.id === id 
+        todo.id === id
           ? { ...todo, completed: !todo.completed }
           : todo
       )
     });
   },
-  
+
   deleteTodo(id) {
     this.update({
       todos: this.todos.filter(todo => todo.id !== id)
     });
   },
-  
+
   render() {
     return h('div', { className: 'todo-app' },
       h('h1', null, 'Todo список'),
-      
+
       h('div', { className: 'todo-input' },
         h('input', {
           type: 'text',
@@ -958,10 +957,10 @@ const TodoApp = Component({
         }),
         h('button', { onClick: this.addTodo }, 'Добавить')
       ),
-      
+
       h('ul', { className: 'todo-list' },
         this.todos.map(todo =>
-          h('li', { 
+          h('li', {
             key: todo.id,
             className: todo.completed ? 'completed' : ''
           },
@@ -971,14 +970,14 @@ const TodoApp = Component({
               onChange: () => this.toggleTodo(todo.id)
             }),
             h('span', null, todo.text),
-            h('button', 
+            h('button',
               { onClick: () => this.deleteTodo(todo.id) },
               'Удалить'
             )
           )
         )
       ),
-      
+
       h('div', { className: 'todo-stats' },
         'Всего: ' + this.todos.length + ', ',
         'Выполнено: ' + this.todos.filter(t => t.completed).length
@@ -992,13 +991,4 @@ mount(h(TodoApp, null), document.getElementById('app'));
 ```
 
 Эти примеры демонстрируют основные возможности библиотеки и могут быть использованы как основа для ваших проектов.
-```
 
----
-
-Готово! Создал два полных Markdown документа:
-
-1. **README.md** - полное описание библиотеки с API, архитектурой и возможностями
-2. **EXAMPLES.md** - 20 практических примеров использования от простых компонентов до полноценного Todo приложения
-
-Вы можете скопировать содержимое каждого документа и сохранить в соответствующие файлы.
