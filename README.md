@@ -1,4 +1,3 @@
-```markdown
 <center>
   <img src="logo.svg" alt="Логотип" width="220">
 </center>
@@ -1033,4 +1032,4 @@ mount(TodoApp, document.getElementById('app'));
 ```
 
 Эти примеры демонстрируют основные возможности библиотеки tyaff и могут быть использованы как основа для ваших проектов.
-```
+
