@@ -2,9 +2,16 @@
   "name": "tyaff",
   "version": "0.0.2",
   "description": "VDOM library",
+  "type": "module",
   "main": "src/code.js",
+  "bugs": {
+    "url": "https://github.com/vflash/tyaff/issues"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/test-node-*.js",
+    "test:01": "node --test tests/test-node-01.js",
+    "test:02": "node --test tests/test-node-02.js",
+    "test:03": "node --test tests/test-node-03.js"
   },
   "keywords": [
     "js",
@@ -17,6 +24,10 @@
     "README.md",
     "logo.svg"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vflash/tyaff"
+  },
   "devDependencies": {
     "happy-dom": "^20.10.6"
   }

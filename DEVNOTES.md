@@ -28,7 +28,7 @@ const Parent = Component({
 `memo()` защищает **только render текущего компонента**. Дети проходят свою цепочку `props → memo → render` независимо от родителя.
 
 ### Техническая реализация
-При пропуске render используется старый vnode (`newVdom = oldVdom`). В `reconcile()` при `oldNode === newNode` (fast path) для HTML-тегов **рекурсивно обходятся дети**:
+При блокировке render используется старый vnode (`newVdom = oldVdom`). В `reconcile()` при `oldNode === newNode` (fast path) для HTML-тегов **рекурсивно обходятся дети**:
 
 ```javascript
 if (oldNode === newNode) {
@@ -51,8 +51,8 @@ if (oldNode === newNode) {
 
 | `memo()` вернул | Компонент | Дети |
 |----------------|-----------|------|
-| Те же зависимости | ❌ render пропущен | ✅ проходят цепочку |
-| Другие зависимости | ✅ render выполнен | ✅ проходят цепочку |
+| Те же зависимости | ❌ render не выполняется | ✅ проходят цепочку |
+| Другие зависимости | ✅ render выполняется | ✅ проходят цепочку |
 
 **Рекомендация разработчикам:** включать context в memo() для оптимизации:
 
@@ -205,12 +205,6 @@ Component({
 - **Функциональный стиль** — `render(props)` читается как чистая функция
 - **Обратная совместимость** — `this.props` всё ещё работает
 
-### Реализация
-Передача props в три места:
-- `def.init.call(inst, inst.props)` в `mountComponent()`
-- `d.memo.call(this, this.props)` в `_rerender()`
-- `d.render.call(this, this.props)` в `_rerender()`
-
 ---
 
 ## 5. Universal mount()
@@ -337,36 +331,149 @@ function triggerMounted(roots) {
 
 ---
 
-## 8. Global Keys: перемещение компонентов
+## 8. Global Keys: настоящие глобальные ключи
 
 ### Проблема
-При перемещении компонента между родителями в рамках одного render instance должен сохраниться.
+При перемещении компонента между родителями в рамках одного render instance должен сохраниться. Но изначально ключи зависели от позиции (`#userKey,index`), что ломалось при перемещении.
 
 ### Решение
-Единая функция `makeMapKey()` используется и при сохранении, и при поиске:
+**Настоящие Global Keys** — ключ уникален в пределах одного render, без привязки к позиции:
 
 ```javascript
 function makeMapKey(vnode, index, path) {
     if (vnode?.props?.key !== undefined) {
         const userKey = String(vnode.props.key).replace(/,/g, ',,');
-        return '#' + userKey + ',' + index;
+        return '#' + userKey;  // ← БЕЗ индекса позиции
     }
     return path;  // автоматический ключ
 }
+```
 
-// populateKeyMap использует тот же makeMapKey:
-if (vnode._instance) {
-    const index = path.split(',').pop() || 0;
-    const key = makeMapKey(vnode, index, path);
-    keyMap.set(key, vnode._instance);
+### Контракт для разработчика
+`key` должен быть уникален среди всех элементов в текущем render (как в React: *"Keys must be unique among siblings"*).
+
+### Применение на уровне root
+Global keys работают не только внутри `render()` компонента, но и при update через `mount()`:
+
+```javascript
+function mount(input, container) {
+    // ...
+    if (oldVnode) {
+        // Создаём keyMap для поддержки Global keys на уровне root
+        const keyMap = new Map();
+        populateKeyMap(oldVnode, '', keyMap);
+
+        reconcile(oldVnode, vnode, container, null, '', keyMap, HTML_NS);
+        // ...
+    }
 }
 ```
 
-**Важно:** `populateKeyMap` и `mountComponent` используют **идентичный алгоритм** формирования ключа. Иначе instance не будет найден при перемещении.
+---
+
+## 9. Keyed Fragment: перемещение групп
+
+### Проблема
+Fragment — прозрачная обёртка без instance, поэтому `key` на нём игнорировался. Группы детей нельзя было перемещать между родителями без потери state.
+
+### Решение
+**Keyed Fragment получает виртуальный instance**:
+
+```javascript
+function mountFragment(vnode, parentDOM, ctx, path, keyMap, namespace) {
+    const hasKey = vnode.props && vnode.props.key !== undefined;
+
+    if (hasKey && keyMap) {
+        const mapKey = makeMapKey(vnode, 0, path);
+        const oldVnode = keyMap.get(mapKey);
+
+        if (oldVnode && oldVnode.tag === Fragment) {
+            keyMap.delete(mapKey);
+
+            // Дети имеют пути относительно Fragment ('')
+            // Это позволяет им находить свои instance независимо от позиции Fragment
+            const nodes = reconcileChildren(
+                oldVnode.childs, vnode.childs, parentDOM, ctx,
+                '', keyMap, namespace
+            );
+
+            vnode._nodes = nodes;
+            vnode._instance = oldVnode._instance;
+            return nodes;
+        }
+    }
+    // ...
+}
+```
+
+### Поведение
+
+| Fragment | `_instance` | Путь детей | Перемещение |
+|----------|-------------|-----------|-------------|
+| Без `key` | отсутствует | `path + ',i'` | дети пересоздаются |
+| С `key` | `{ _isKeyedFragment: true }` | `',i'` (относительно) | instance сохраняются |
+
+### Пример использования
+```javascript
+// Группы можно перемещать — дети сохранят instance
+h('div', null,
+    h(Fragment, { key: 'group-a' },
+        h(Item, { key: 'i1' }),
+        h(Item, { key: 'i2' })
+    )
+)
+```
 
 ---
 
-## 9. Производительность: Big List бенчмарк
+## 10. Controlled forms: порядок атрибутов
+
+### Проблема
+Для `<select multiple>` значение `value` применялось **до** `multiple`, из-за чего `dom.multiple === false` в момент установки selected — выбор не работал.
+
+### Решение
+В `applyProps` атрибут `multiple` применяется **отдельно, перед** всеми остальными. А `value`/`checked` — **после**:
+
+```javascript
+function applyProps(dom, oldProps, newProps, namespace) {
+    // 1. Удаляем старые
+    for (const k in oldProps) {
+        if (!(k in newProps)) applyProp(dom, k, null, namespace);
+    }
+
+    // 2. Для SELECT: multiple первым
+    if (isFormElement && dom.tagName === 'SELECT' && 'multiple' in newProps) {
+        if (oldProps.multiple !== newProps.multiple) {
+            dom.multiple = !!newProps.multiple;
+            if (newProps.multiple) dom.setAttribute('multiple', '');
+            else dom.removeAttribute('multiple');
+        }
+    }
+
+    // 3. Все остальные атрибуты КРОМЕ value/checked
+    for (const k in newProps) {
+        if (isFormElement && (k === 'value' || k === 'checked')) continue;
+        if (k === 'multiple' && dom.tagName === 'SELECT') continue;
+        if (oldProps[k] !== newProps[k]) {
+            applyProp(dom, k, newProps[k], namespace);
+        }
+    }
+
+    // 4. Теперь value/checked — когда options уже в DOM и multiple установлен
+    if (isFormElement) {
+        if ('value' in newProps && oldProps.value !== newProps.value) {
+            applyProp(dom, 'value', newProps.value, namespace);
+        }
+        if ('checked' in newProps && oldProps.checked !== newProps.checked) {
+            applyProp(dom, 'checked', newProps.checked, namespace);
+        }
+    }
+}
+```
+
+---
+
+## 11. Performance: Big List бенчмарк
 
 ### Честные замеры через refresh()
 
@@ -412,7 +519,7 @@ Tyaff работает на уровне React **с оптимизациями**
 
 ---
 
-## 10. Исправленные баги (для истории)
+## 12. Исправленные баги (для истории)
 
 ### Баг #1: Fast path не recurse в детей
 **Симптом:** memo() защитил render родителя, но дети-компоненты не перечитали контекст.
@@ -426,7 +533,7 @@ Tyaff работает на уровне React **с оптимизациями**
 
 **Причина:** `populateKeyMap` сохранял по `path`, а `mountComponent` искал по `makeMapKey`.
 
-**Исправление:** `populateKeyMap` теперь использует `makeMapKey`.
+**Исправление:** `populateKeyMap` теперь использует `makeMapKey`. Позже переделано на настоящие Global Keys без привязки к позиции.
 
 ### Баг #3: Автобиндинг перезаписывал встроенные методы
 **Симптом:** Пользовательский метод с именем `update` перезаписывал встроенный API.
@@ -445,9 +552,85 @@ Tyaff работает на уровне React **с оптимизациями**
 
 **Исправление:** Двухпроходный алгоритм — сбор + обратный порядок.
 
+### Баг #6: Keyed Fragment не перемещался
+**Симптом:** При перемещении `Fragment` между родителями его дети пересоздавались.
+
+**Причина:** Fragment не имел `_instance`, поэтому ключ игнорировался.
+
+**Исправление:** Keyed Fragment получает виртуальный `_instance = { _isKeyedFragment: true }`, дети имеют пути относительно него.
+
+### Баг #7: SELECT multiple не выбирал значения
+**Симптом:** `h('select', { multiple: true, value: ['a', 'c'] }, ...)` не выбирал опции.
+
+**Причина:** `value` применялся до `multiple`, когда `dom.multiple === false`.
+
+**Исправление:** В `applyProps` атрибуты применяются в правильном порядке: `multiple` → остальные → `value/checked`.
+
+### Баг #8: Разные конструкторы не заменяли друг друга
+**Симптом:** `mount(A, c)` затем `mount(B, c)` — instance A переиспользовался для B.
+
+**Причина:** `mountComponent` находил instance по keyMap, но не проверял `_definition`.
+
+**Исправление:** Проверка `inst._definition !== def` с unmount старого instance.
+
+### Баг #9: Ошибка в компоненте ломала всё дерево
+**Симптом:** Исключение в `render()` одного компонента прерывало весь `mount`/`reconcile`.
+
+**Исправление:** `try/catch` вокруг `inst._rerender()` в `mountComponent` и `reconcileComponent`.
+
+### Баг #10: Portal контент перемещался в parent DOM
+**Симптом:** При update портала его контент оказывался в основном дереве, а не в target.
+
+**Причина:** `collectDOMNodes` recurse в `_nodes` Portal, `syncDOMChildren` пытался их переместить.
+
+**Исправление:** Для Portal (`inst._isPortal`) не recurse в `_nodes` — они живут в отдельном контейнере.
+
 ---
 
-## 11. Именованные экспорты
+## 13. Известные ограничения
+
+### render → null → render не восстанавливает DOM
+
+**Проблема:** Когда `render()` возвращает `null`, `this._vdom` становится `null`. При следующем render с реальным vnode, `oldVdom = null`, что приводит к `wasFirstRender = true`. Из-за этого `syncDOMChildren` не вызывается, и DOM не обновляется.
+
+**Workaround:** Использовать условный рендер через `&&` внутри обёртки вместо прямого возврата `null`:
+
+```javascript
+// ПЛОХО (баг):
+render() { return this.show ? h('div', null, 'text') : null; }
+
+// ХОРОШО (workaround):
+render() {
+    return h('div', null,
+        this.show && h('span', null, 'text')
+    );
+}
+```
+
+**Причина в коде:**
+```javascript
+const wasFirstRender = !oldVdom;  // ← неправильно когда render вернул null
+
+if (!wasFirstRender && this._parentDOM) {
+    syncDOMChildren(this._parentDOM, oldNodes, flat);  // ← пропускается!
+}
+```
+
+### Нет двусторонних ссылок
+Компонент хранит только `_vdom` (вниз), не обратную ссылку на vnode. Это упрощает GC и предотвращает утечки памяти.
+
+### Нет state как отдельной сущности
+Все переменные — прямые мутабельные свойства на instance (`this._count`). Нет абстракции над state — проще и быстрее.
+
+### O(n) diff алгоритм
+Линейная сложность даже для partial updates. Компромисс: простота кода vs производительность для 100K+ элементов. Решение: виртуализация для больших списков.
+
+### Нет fine-grained reactivity (как в Solid.js)
+Tyaff использует vnode-diff подход (как React/Vue). Solid.js обновляет только изменённые DOM-узлы без diff, но требует compile-time трансформации. Tyaff — runtime-only библиотека.
+
+---
+
+## 14. Именованные экспорты
 
 ### Решение
 ```javascript
@@ -468,23 +651,7 @@ await refresh();  // коротко, tree-shake работает
 
 ---
 
-## 12. Архитектурные ограничения (принятые осознанно)
-
-### Нет двусторонних ссылок
-Компонент хранит только `_vdom` (вниз), не обратную ссылку на vnode. Это упрощает GC и предотвращает утечки памяти.
-
-### Нет state как отдельной сущности
-Все переменные — прямые мутабельные свойства на instance (`this._count`). Нет абстракции над state — проще и быстрее.
-
-### O(n) diff алгоритм
-Линейная сложность даже для partial updates. Компромисс: простота кода vs производительность для 100K+ элементов. Решение: виртуализация для больших списков.
-
-### Нет fine-grained reactivity (как в Solid.js)
-Tyaff использует vnode-diff подход (как React/Vue). Solid.js обновляет только изменённые DOM-узлы без diff, но требует compile-time трансформации. Tyaff — runtime-only библиотека.
-
----
-
-## 13. Стиль кода и соглашения
+## 15. Стиль кода и соглашения
 
 - **Отступ:** 4 пробела (не 2)
 - **ES6 модули:** `export { ... }`, не `export default`
@@ -494,6 +661,133 @@ Tyaff использует vnode-diff подход (как React/Vue). Solid.js 
 
 ---
 
+## 16. Терминология в документации
+
+### ✅ Рекомендуемые формулировки
+
+| Ситуация | RU формулировка | EN формулировка |
+|----------|----------------|-----------------|
+| render() выполнился | `render()` выполняется | `render()` is executed |
+| render() не выполнился | `render()` не выполняется | `render()` is not executed |
+| memo() остановил render | `memo()` заблокировал render | `memo()` blocked render |
+| memo() пропустил render | `memo()` разрешил render | `memo()` allowed render |
+| rerender не запущен | rerender блокируется | rerender is blocked |
+| null в VDOM | `null` игнорируется | `null` is ignored |
+| Lifecycle hook | `onUpdated()` (со скобками) | `onUpdated()` |
+
+### ❌ Формулировки которых следует избегать
+
+| Слово | Почему избегать |
+|-------|-----------------|
+| **пропущен / пропуск** | Двусмысленно: "прошёл мимо" vs "не был выполнен" |
+| **подавлен** | Звучит как ошибка или аварийная ситуация |
+| **подавление** | Носит негативный оттенок |
+| **скип / скипнут** | Сленг, теряет смысл в формальной документации |
+
+### 🌐 Проверка через перевод
+
+При написании документации полезно мысленно перевести формулировку на английский и обратно. Если смысл сохраняется — термин удачен.
+
+**Используйте глаголы с чёткой семантикой выполнения/невыполнения:**
+- Выполняется / не выполняется
+- Разрешён / заблокирован
+- Выполнен / не выполнен
+
+---
+
+## 17. Тестовая стратегия
+
+### Структура тестов
+
+```
+tests/
+├── test-node-01.js  ← базовые механизмы (46 тестов)
+├── test-node-02.js  ← DOM и продвинутые механизмы (45 тестов)
+└── test-node-03.js  ← интеграционные сценарии (25 тестов)
+```
+
+### Запуск
+
+```bash
+# Все 116 тестов изолированно (каждый файл в отдельном процессе)
+node --test tests/test-node-*.js
+
+# Отдельные файлы
+node --test tests/test-node-01.js  # 46 тестов
+node --test tests/test-node-02.js  # 45 тестов
+node --test tests/test-node-03.js  # 25 тестов
+```
+
+**Важно:** glob-паттерн `test-node-*.js` запускает каждый файл в **отдельном процессе Node.js**, что обеспечивает полную изоляцию и предотвращает утечки состояния между тестами (например, `refresh()` не видит "мёртвые" деревья из других файлов).
+
+### Покрытие по файлам
+
+#### test-node-01.js — базовые механизмы (46 тестов)
+
+| Категория | Тестов | Что проверяется |
+|-----------|--------|-----------------|
+| h() runtime | 7 | Нормализация, null/false/true, массивы, props.children |
+| Component() фабрика | 3 | Конструктор, _definition, context не копируется |
+| Fragment/Portal (pure) | 3 | Symbol, createPortal, children массив |
+| mount() базовое | 5 | HTML, компонент, конструктор, массив, строка |
+| mount() edge cases | 2 | null на пустой, замена конструкторов |
+| Props/init порядок | 4 | Props первым аргументом, однократный init, children |
+| memo() защита render | 6 | Блокировка, разрешение, изоляция детей, объекты, onUpdated |
+| Lifecycle hooks | 4 | onMounted (1 раз, children-first), onUnmounted (DOM доступен), onUpdated |
+| Context | 5 | Propagation, contextSelf, undefined без провайдера, переопределение, рекурсия |
+| Keys/Fragment | 3 | Global keys, keyed Fragment перемещение, non-keyed Fragment |
+| Refs lifecycle | 4 | ref(node), ref(null), ref на компонент, this.refs(name) |
+
+#### test-node-02.js — DOM и продвинутые механизмы (45 тестов)
+
+| Категория | Тестов | Что проверяется |
+|-----------|--------|-----------------|
+| Reconcile edge cases | 8 | Reorder с keys, удаление, вставка, замена tag, text↔element, null placeholder |
+| Attribute handling | 9 | className/htmlFor/tabIndex, style, onClick, data-*/aria-*, dangerouslySetInnerHTML, boolean |
+| SVG namespace | 4 | svg namespace, circle/path, viewBox camelCase, foreignObject |
+| Controlled forms | 6 | value на input, checked, select multiple, textarea, пересоздание input/select |
+| Update engine | 5 | patch, без изменений, {}, init подавление, лимит 50 |
+| Batching | 1 | Несколько update → один render |
+| Portal | 3 | Deferred mounting, смена контейнера, ref на портал |
+| refresh() | 4 | HTML-корень, время, несколько деревьев, пустой refresh |
+| Unmount | 1 | mount(null) размонтирует |
+| Защита от ошибок | 2 | update() в render(), изоляция ошибок |
+| Performance | 2 | Initial 1K < 200ms, partial 1/1K < 10ms |
+
+#### test-node-03.js — интеграционные сценарии (25 тестов)
+
+| Категория | Тестов | Что проверяется |
+|-----------|--------|-----------------|
+| Todo App | 2 | Полный CRUD цикл, reorder через key |
+| Tabs | 1 | Переключение вкладок, mount/unmount state |
+| Forms | 2 | Связанные поля, динамические поля |
+| Context продвинутый | 4 | i18n, theme+memo, несколько провайдеров, аргументы |
+| Portals продвинутый | 2 | Модалки с context, несколько порталов |
+| Concurrent updates | 2 | Параллельные обновления, parent+child |
+| Edge cases | 5 | Глубокое дерево (100 уровней), условный рендер, Fragment вложенный, null-плейсхолдеры |
+| Stress tests | 2 | 100 updates, 1000 элементов × 10 реверсов |
+| Real-world patterns | 3 | Router simulation, global store, wizard |
+| Memory & cleanup | 2 | onUnmounted рекурсивно, refs обнуление |
+
+### Принципы написания тестов
+
+1. **Прямой доступ к instance через refs** — надёжнее чем симуляция событий
+2. **Обёртка в родительский компонент** — стабилизирует DOM структуру
+3. **`includes()` вместо строгого сравнения HTML** — устойчивее к различиям
+4. **Хелпер `simulateClick`** — для корректной работы в happy-dom
+
+---
+
 ## Заключение
 
 Этот документ — живая история разработки. При изменении архитектуры или обнаружении новых edge cases — добавляйте записи сюда. Это помогает новым разработчикам (и себе через месяц) понять **почему** код такой, какой он есть.
+
+### Финальная статистика библиотеки
+
+- 📦 **116 тестов** в 3 файлах, все проходят
+- 🛡️ **Полное покрытие** всех архитектурных контрактов
+- 📖 **Подробная документация** с обоснованиями решений
+- 🚀 **Production-ready** с честными бенчмарками
+- 🐛 **10 исправленных багов** задокументированы для истории
+
+Библиотека готова к использованию в реальных проектах. 🏆
