@@ -47,7 +47,6 @@ function collectDOMNodes(childs) {
         if (node._instance) {
             const inst = node._instance;
             if (inst._anchor && inst._anchor.nodeType) result.push(inst._anchor);
-            // Для Portal НЕ recurse в _nodes — они физически в другом контейнере
             if (!inst._isPortal && Array.isArray(inst._nodes)) {
                 for (let i = 0; i < inst._nodes.length; i++) walk(inst._nodes[i]);
             }
@@ -104,6 +103,7 @@ function Component(definition) {
         this._prevMemo = null;
         this._keyMap = new Map();
         this._refCollectors = {};
+        this._updateResolvers = null;
         this._isMounted = false;
         this._isUpdating = false;
         this._isRendering = false;
@@ -245,9 +245,17 @@ function attachInstanceAPI(inst) {
             this._nodes = flat;
             this._vdom = newVdom;
 
-            // onUpdated вызывается после ЛЮБОГО реального render (включая первый)
             if (shouldRender && !wasFirstRender && d.onUpdated) {
                 d.onUpdated.call(this);
+            }
+
+            // Резолвим все Promise'ы от update() с результатом render
+            const resolvers = this._updateResolvers;
+            this._updateResolvers = null;
+            if (resolvers) {
+                for (let i = 0; i < resolvers.length; i++) {
+                    resolvers[i](shouldRender);
+                }
             }
         } finally {
             this._isUpdating = false;
@@ -260,23 +268,30 @@ function attachInstanceAPI(inst) {
                 '❌ Cannot call update() inside render().\n' +
                 'Use direct assignment instead: this.value = 22;'
             );
-            return;
+            return Promise.resolve(false);
         }
         if (patch && typeof patch === 'object') {
             if (Object.keys(patch).length === 0) {
-                if (this._isInitializing) return;
-                scheduleUpdate(this);
-                return;
+                if (this._isInitializing) return Promise.resolve(false);
+                return this._scheduleUpdate();
             }
             let changed = false;
             for (const k in patch) {
                 if (this[k] !== patch[k]) { changed = true; break; }
             }
-            if (!changed) return;
+            if (!changed) return Promise.resolve(false);
             Object.assign(this, patch);
         }
-        if (this._isInitializing) return;
-        scheduleUpdate(this);
+        if (this._isInitializing) return Promise.resolve(false);
+        return this._scheduleUpdate();
+    };
+
+    inst._scheduleUpdate = function() {
+        return new Promise(resolve => {
+            if (!this._updateResolvers) this._updateResolvers = [];
+            this._updateResolvers.push(resolve);
+            scheduleUpdate(this);
+        });
     };
 
     inst._refCollectors = {};
@@ -319,7 +334,7 @@ function attachInstanceAPI(inst) {
     const reserved = [
         'init', 'render', 'props', 'memo',
         'onMounted', 'onUpdated', 'onUnmounted', 'context',
-        'update', 'refs', 'contextSelf', '_rerender'
+        'update', 'refs', 'contextSelf', '_rerender', '_scheduleUpdate'
     ];
     for (const key in def) {
         const val = def[key];
@@ -496,9 +511,36 @@ function applyProps(dom, oldProps, newProps, namespace) {
     for (const k in oldProps) {
         if (!(k in newProps)) applyProp(dom, k, null, namespace);
     }
+
+    const isSVG = namespace === SVG_NS;
+    const isFormElement = !isSVG && (
+        dom.tagName === 'INPUT' ||
+        dom.tagName === 'TEXTAREA' ||
+        dom.tagName === 'SELECT'
+    );
+
+    if (isFormElement && dom.tagName === 'SELECT' && 'multiple' in newProps) {
+        if (oldProps.multiple !== newProps.multiple) {
+            dom.multiple = !!newProps.multiple;
+            if (newProps.multiple) dom.setAttribute('multiple', '');
+            else dom.removeAttribute('multiple');
+        }
+    }
+
     for (const k in newProps) {
+        if (isFormElement && (k === 'value' || k === 'checked')) continue;
+        if (k === 'multiple' && dom.tagName === 'SELECT') continue;
         if (oldProps[k] !== newProps[k]) {
             applyProp(dom, k, newProps[k], namespace);
+        }
+    }
+
+    if (isFormElement) {
+        if ('value' in newProps && oldProps.value !== newProps.value) {
+            applyProp(dom, 'value', newProps.value, namespace);
+        }
+        if ('checked' in newProps && oldProps.checked !== newProps.checked) {
+            applyProp(dom, 'checked', newProps.checked, namespace);
         }
     }
 }
@@ -782,7 +824,6 @@ function reconcileChildren(oldChilds, newChilds, parentDOM, ctx, path, keyMap, n
     return newNodes;
 }
 
-// ВАЖНО: Для SELECT value применяется ПОСЛЕ добавления options
 function mountHTML(vnode, parentDOM, ctx, path, keyMap, namespace) {
     if (vnode.tag === 'svg') namespace = SVG_NS;
     const isForeignObject = vnode.tag === 'foreignObject';
@@ -793,7 +834,6 @@ function mountHTML(vnode, parentDOM, ctx, path, keyMap, namespace) {
 
     const isSelect = dom.tagName === 'SELECT';
 
-    // Для SELECT: value применяется после options
     if (isSelect) {
         const propsWithoutValue = {};
         for (const k in vnode.props) {
@@ -815,7 +855,6 @@ function mountHTML(vnode, parentDOM, ctx, path, keyMap, namespace) {
     }
     prependAll(dom, childNodes);
 
-    // Для SELECT: value после options
     if (isSelect && vnode.props && 'value' in vnode.props) {
         applyProp(dom, 'value', vnode.props.value, namespace);
     }
@@ -823,7 +862,6 @@ function mountHTML(vnode, parentDOM, ctx, path, keyMap, namespace) {
     return dom;
 }
 
-// ВАЖНО: Для SELECT value применяется ПОСЛЕ reconcile options
 function reconcileHTML(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespace) {
     if (newVnode.tag === 'svg') namespace = SVG_NS;
     const isForeignObject = newVnode.tag === 'foreignObject';
@@ -874,7 +912,6 @@ function reconcileHTML(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespa
         oldVnode.childs, newVnode.childs, dom, ctx, path, keyMap, childNamespace
     );
 
-    // Для SELECT: value после reconcile options
     if (isSelect && 'value' in newVnode.props) {
         if (oldVnode.props.value !== newVnode.props.value) {
             applyProp(dom, 'value', newVnode.props.value, namespace);
@@ -1262,7 +1299,6 @@ function refresh() {
     });
 }
 
-// Только для тестов — не использовать в продакшене
 function _cleanupAll() {
     for (const container of Array.from(mountedContainers)) {
         try {

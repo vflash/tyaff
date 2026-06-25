@@ -1,6 +1,6 @@
 // ============================================================================
-// Node.js продвинутые тесты для VDOM библиотеки tyaff
-// Запуск: node --test tests/test-node-02.js
+// Node.js тесты для VDOM библиотеки tyaff — Часть 3: интеграционные сценарии
+// Запуск: node --test tests/test-node-03.js
 // ============================================================================
 
 import { test, describe } from 'node:test';
@@ -237,7 +237,6 @@ if (hasDOM) {
                 confirm: '',
 
                 render() {
-                    // Проверяем валидность прямо в render
                     const isValid = this.password.length >= 8 && this.password === this.confirm;
                     return h('form', null,
                         h('div', { className: 'status' },
@@ -251,21 +250,18 @@ if (hasDOM) {
             await delay(50);
             assert.equal(container.querySelector('.status').textContent, '✗ Invalid');
 
-            // Устанавливаем password
             formRef.current.update({ password: 'secret123' });
             await delay(50);
             assert.equal(formRef.current.password, 'secret123');
             assert.equal(formRef.current.confirm, '');
             assert.equal(container.querySelector('.status').textContent, '✗ Invalid');
 
-            // Устанавливаем confirm (тот же пароль)
             formRef.current.update({ confirm: 'secret123' });
             await delay(50);
             assert.equal(formRef.current.password, 'secret123');
             assert.equal(formRef.current.confirm, 'secret123');
             assert.equal(container.querySelector('.status').textContent, '✓ Valid');
 
-            // Меняем confirm на другой
             formRef.current.update({ confirm: 'different' });
             await delay(50);
             assert.equal(container.querySelector('.status').textContent, '✗ Invalid');
@@ -332,7 +328,6 @@ if (hasDOM) {
             await delay(10);
             assert.equal(container.querySelectorAll('.field').length, 3);
 
-            // Прямое обновление второго поля
             formRef.current.updateField(2, 'second');
             await delay(10);
             assert.equal(formRef.current.fields[1].value, 'second');
@@ -724,8 +719,6 @@ if (hasDOM) {
             const App = Component({
                 show: true,
                 render() {
-                    // Всегда возвращаем div-обёртку, условный контент внутри
-                    // Это избегает бага с render→null→render
                     return h('div', { id: 'wrapper' },
                         this.show && h('div', { className: 'content' }, 'visible')
                     );
@@ -1023,31 +1016,25 @@ if (hasDOM) {
 
             assert.equal(container.querySelector('h2').textContent, 'Step 1');
 
-            // Step 1: вводим имя
             wizardRef.current.updateData('name', 'Alice');
             await delay(10);
 
-            // Переход на step 2
             simulateClick(container.querySelector('.next'));
             await delay(10);
 
             assert.equal(container.querySelector('h2').textContent, 'Step 2');
 
-            // Step 2: вводим email
             wizardRef.current.updateData('email', 'alice@example.com');
             await delay(10);
 
-            // Возврат назад — данные должны сохраниться
             simulateClick(container.querySelector('.prev'));
             await delay(10);
             assert.equal(wizardRef.current.data.name, 'Alice', 'данные из step 1 должны сохраниться');
 
-            // Вперёд на step 2 снова
             simulateClick(container.querySelector('.next'));
             await delay(10);
             assert.equal(wizardRef.current.data.email, 'alice@example.com', 'данные из step 2 должны сохраниться');
 
-            // Вперёд на step 3 (summary)
             simulateClick(container.querySelector('.next'));
             await delay(10);
             assert.equal(container.querySelector('h2').textContent, 'Step 3');
@@ -1126,6 +1113,125 @@ if (hasDOM) {
             assert.equal(lastRef, null);
         });
     });
+
+    // =========================================================================
+    // UPDATE PROMISE<boolean> — НОВАЯ СЕКЦИЯ
+    // =========================================================================
+    describe('update() возвращает Promise<boolean>', () => {
+        test('возвращает true когда render выполнился', async () => {
+            const container = createContainer();
+            const MyComp = Component({
+                count: 0,
+                render() { return h('div', null, this.count); }
+            });
+
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
+
+            const result = await inst.update({ count: 1 });
+            assert.equal(result, true);
+            assert.equal(inst.count, 1);
+        });
+
+        test('возвращает false когда patch не изменил значений', async () => {
+            const container = createContainer();
+            const MyComp = Component({
+                count: 5,
+                render() { return h('div', null, this.count); }
+            });
+
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
+
+            const result = await inst.update({ count: 5 });
+            assert.equal(result, false);
+            assert.equal(inst.count, 5);
+        });
+
+        test('возвращает false когда memo() заблокировал render', async () => {
+            const container = createContainer();
+            const MyComp = Component({
+                memo(props) { return [props.value]; },
+                render(props) { return h('div', null, props.value); }
+            });
+
+            const vnode = mount(h(MyComp, { value: 1 }), container);
+            const inst = vnode._instance;
+
+            const result = await inst.update({ value: 1 });
+            assert.equal(result, false);
+        });
+
+        test('возвращает false при update() во время init', async () => {
+            const container = createContainer();
+            let initResult = null;
+
+            const MyComp = Component({
+                init() {
+                    this.update({ count: 10 }).then(r => { initResult = r; });
+                },
+                render() { return h('div'); }
+            });
+
+            mount(MyComp, container);
+            await delay(10);
+
+            assert.equal(initResult, false);
+        });
+
+        test('batching: все update() получают один результат', async () => {
+            const container = createContainer();
+            let renderCount = 0;
+
+            const MyComp = Component({
+                a: 0, b: 0, c: 0,
+                render() { renderCount++; return h('div'); }
+            });
+
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
+            renderCount = 0;
+
+            const [r1, r2, r3] = await Promise.all([
+                inst.update({ a: 1 }),
+                inst.update({ b: 2 }),
+                inst.update({ c: 3 })
+            ]);
+
+            assert.equal(r1, true);
+            assert.equal(r2, true);
+            assert.equal(r3, true);
+            assert.equal(renderCount, 1, 'должен быть один render на всех');
+        });
+
+        test('update() без patch — принудительный render', async () => {
+            const container = createContainer();
+            const MyComp = Component({
+                render() { return h('div'); }
+            });
+
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
+
+            const result = await inst.update();
+            assert.equal(result, true);
+        });
+
+        test('принудительный update с memo() может вернуть false', async () => {
+            const container = createContainer();
+            const MyComp = Component({
+                value: 1,
+                memo() { return [this.value]; },
+                render() { return h('div'); }
+            });
+
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
+
+            const result = await inst.update({});
+            assert.equal(result, false);
+        });
+    });
 }
 
-console.log('\n✅ Test-node-02 инициализирован\n');
+console.log('\n✅ Test-node-03 инициализирован (32 теста)\n');
