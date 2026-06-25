@@ -369,6 +369,9 @@ function populateKeyMap(vnode, path, keyMap) {
 
         if (hasKey && vnode._instance) {
             const key = makeMapKey(vnode, 0, path);
+            if (keyMap.has(key)) {
+                console.warn(`⚠️ Warning: Duplicate key "${vnode.props.key}" detected in Fragment. Keys must be unique within a single render call.`);
+            }
             keyMap.set(key, vnode._instance);
         }
 
@@ -383,6 +386,9 @@ function populateKeyMap(vnode, path, keyMap) {
 
     if (vnode._instance) {
         const key = makeMapKey(vnode, 0, path);
+        if (keyMap.has(key)) {
+            console.warn(`⚠️ Warning: Duplicate key "${vnode.props.key}" detected. Keys must be unique within a single render call.`);
+        }
         keyMap.set(key, vnode._instance);
     }
 
@@ -1264,6 +1270,11 @@ function mount(input, container) {
     const nodes = mountNode(vnode, container, null, '', null, HTML_NS);
     const flat = Array.isArray(nodes) ? nodes : (nodes ? [nodes] : []);
     prependAll(container, flat);
+
+    // Проверяем дубликаты ключей при первом mount
+    const keyMap = new Map();
+    populateKeyMap(vnode, '', keyMap);
+
     mountedTrees.set(container, vnode);
     mountedContainers.add(container);
     callRefs(vnode);

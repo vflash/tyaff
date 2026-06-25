@@ -126,6 +126,13 @@ h('div', { className: 'container' },
 }
 ```
 
+**Зарезервированные имена** (нельзя переопределять пользователю):
+```
+init, render, props, memo,
+onMounted, onUpdated, onUnmounted, context,
+update, refs, contextSelf
+```
+
 ### createPortal(children, containerGetter)
 Создание портала для монтирования в произвольный DOM-контейнер.
 
@@ -212,6 +219,13 @@ const time = await refresh();  // Promise<number> — время в миллис
 - Выполняет `update()` у каждого
 - Возвращает `Promise`, который разрешается после завершения всех обновлений
 
+**Особенность:** `refresh()` обновляет **все** компоненты в дереве, даже если корень — HTML-тег, а не компонент.
+
+```javascript
+mount(h('div', null, h(MyComponent)), container);
+await refresh();  // ✅ MyComponent обновится
+```
+
 **Use cases:**
 - Измерение производительности рендера
 - Интеграция с глобальным state (store, singleton)
@@ -246,15 +260,16 @@ if (time > 16) console.warn('Slow render');
 - `props(incoming)` — нормализация пропсов (чистая функция)
 - `memo(props)` — массив зависимостей для оптимизации
 - `render(props)` — возврат VDOM
-- `onMounted()` — после вставки в DOM
-- `onUpdated()` — после обновления DOM (только если render выполнен)
-- `onUnmounted()` — перед удалением
+- `onMounted()` — **после** вставки в DOM, **children-first** (дети монтируются раньше родителей)
+- `onUpdated()` — после обновления DOM. Выполняется **только при update**, НЕ при первом mount
+- `onUnmounted()` — **до** удаления DOM (DOM ещё доступен для cleanup)
 
 ### Update Engine
 - Batching через microtask — множественные `update()` объединяются в один render
 - Защита от рекурсии и бесконечных циклов (лимит 50 итераций)
 - Изоляция ошибок — падающий компонент не ломает другие
 - `memo()` блокирует только текущий компонент, дети продолжают цепочку
+- `update(patch?)` возвращает `Promise<boolean>` — `true` если render выполнен, `false` если заблокирован
 
 
 ## Обработка атрибутов
@@ -282,6 +297,11 @@ if (time > 16) console.warn('Slow render');
 { checked: true }       // → element.checked
 { selected: true }      // → element.selected
 ```
+
+**Порядок применения атрибутов для `<select multiple value={[...]}>`:**
+1. Сначала применяется `multiple`
+2. Потом остальные атрибуты
+3. В конце `value`/`checked` (когда options уже в DOM)
 
 ### Специальные атрибуты
 ```javascript
@@ -318,12 +338,48 @@ if (time > 16) console.warn('Slow render');
 - Минимизируйте вложенность компонентов
 
 
+## ⚠️ Известные ограничения
+
+### Условный рендер: используйте `&&` внутри обёртки
+
+Возврат `null` из `render()` может некорректно восстанавливать DOM при последующих рендерах. Рекомендуется использовать условный рендер внутри обёртки через `&&`:
+
+```javascript
+// ❌ Не рекомендуется — может не восстановить DOM
+render() {
+    return this.show ? h('div', null, 'text') : null;
+}
+
+// ✅ Правильно — внутри обёртки
+render() {
+    return h('div', null,
+        this.show && h('span', null, 'content')
+    );
+}
+```
+
+### Геттеры не копируются на instance
+
+Геттеры из `definition` не попадают на instance (`typeof getter === 'function'`). Используйте обычные методы или вычисляйте значения в `render()`.
+
+### Нет fine-grained reactivity
+
+Библиотека использует vnode-diff подход. Для 100K+ элементов с частыми updates нужна виртуализация (не входит в core).
+
+
 ## Совместимость
 
 - ES6+ (ES2015 и выше)
 - Современные браузеры
 - `WeakMap`, `Symbol`, `Promise`, `Array.from`
 - Без внешних зависимостей
+
+
+## 🌐 Browser Support
+
+- `replaceChildren()`: Chrome 86+, Firefox 78+, Safari 14+
+- ES6 modules: все современные браузеры
+- `performance.now()`: все современные браузеры
 
 
 ## Лицензия
@@ -339,7 +395,7 @@ MIT
 ## 1. Простой компонент
 
 ```javascript
-import { h, Component, mount } from './core.js';
+import { h, Component, mount } from 'tyaff';
 
 const HelloWorld = Component({
     render() {
@@ -360,8 +416,12 @@ mount(HelloWorld, document.body);
 const Counter = Component({
     count: 0,
 
-    increment() {
-        this.update({ count: this.count + 1 });
+    // update() возвращает Promise<boolean>
+    async increment() {
+        const rendered = await this.update({ count: this.count + 1 });
+        if (!rendered) {
+            console.log('Render заблокирован memo()');
+        }
     },
 
     decrement() {
@@ -420,14 +480,17 @@ const Timer = Component({
         }, 1000);
     },
 
+    // Выполняется children-first: сначала onMounted у детей, потом у родителя
     onMounted() {
         console.log('Компонент смонтирован, DOM доступен');
     },
 
+    // Выполняется только при update, НЕ при первом mount
     onUpdated() {
         console.log('Компонент обновлён:', this.count);
     },
 
+    // Выполняется ДО удаления DOM — DOM ещё доступен для cleanup
     onUnmounted() {
         console.log('Компонент будет удалён');
         clearInterval(this.intervalId);
@@ -718,7 +781,7 @@ const Tabs = Component({
 });
 ```
 
-## 12. Условный рендеринг
+## 12. Условный рендеринг (рекомендуемый способ)
 
 ```javascript
 const ConditionalRender = Component({
@@ -732,12 +795,11 @@ const ConditionalRender = Component({
         return h('div', null,
             h('button', { onClick: this.toggle }, 'Показать детали'),
 
-            this.showDetails
-                ? h('div', { className: 'details' },
-                    h('p', null, 'Это детализированная информация'),
-                    h('p', null, 'Здесь больше контента')
-                )
-                : null
+            // ✅ Используем && внутри обёртки для надёжного условного рендера
+            this.showDetails && h('div', { className: 'details' },
+                h('p', null, 'Это детализированная информация'),
+                h('p', null, 'Здесь больше контента')
+            )
         );
     }
 });
@@ -782,6 +844,30 @@ const Form = Component({
         );
     }
 });
+
+// SELECT multiple — атрибуты применяются в правильном порядке
+const MultiSelect = Component({
+    options: ['Apple', 'Banana', 'Cherry'],
+    selected: ['Apple'],
+
+    handleChange(e) {
+        const values = Array.from(e.target.selectedOptions, opt => opt.value);
+        this.update({ selected: values });
+    },
+
+    render() {
+        return h('select', {
+            multiple: true,                // 1. Сначала multiple
+            size: 5,                        // 2. Потом другие атрибуты
+            value: this.selected,           // 3. В конце value (options уже в DOM)
+            onChange: this.handleChange
+        },
+            this.options.map(opt =>
+                h('option', { key: opt, value: opt }, opt)
+            )
+        );
+    }
+});
 ```
 
 ## 14. SVG компоненты
@@ -820,7 +906,7 @@ const Button = Component({
 export const store = { count: 0, user: null };
 
 // App.js
-import { h, Component, mount, refresh } from './core.js';
+import { h, Component, mount, refresh } from 'tyaff';
 import { store } from './store.js';
 
 const Counter = Component({
@@ -1029,4 +1115,3 @@ mount(TodoApp, document.getElementById('app'));
 ```
 
 Эти примеры демонстрируют основные возможности библиотеки tyaff и могут быть использованы как основа для ваших проектов.
-
