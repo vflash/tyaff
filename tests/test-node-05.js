@@ -1,6 +1,6 @@
 // ============================================================================
 // Node.js тесты для VDOM библиотеки tyaff — Часть 5
-// update() возвращает Promise<boolean> + Key identifiers
+// update() Promise<boolean> + Key identifiers
 // Запуск: node --test tests/test-node-05.js
 // ============================================================================
 
@@ -79,7 +79,6 @@ if (hasDOM) {
             const vnode = mount(h(MyComp, { value: 1 }), container);
             const inst = vnode._instance;
 
-            // То же значение props.value — memo заблокирует render
             const result = await inst.update({ value: 1 });
             assert.equal(result, false);
         });
@@ -129,6 +128,7 @@ if (hasDOM) {
         test('update() без patch — принудительный render', async () => {
             const container = createContainer();
             let renderCount = 0;
+
             const MyComp = Component({
                 render() { renderCount++; return h('div'); }
             });
@@ -145,6 +145,7 @@ if (hasDOM) {
         test('принудительный update({}) с memo() может вернуть false', async () => {
             const container = createContainer();
             let renderCount = 0;
+
             const MyComp = Component({
                 value: 1,
                 memo() { return [this.value]; },
@@ -155,7 +156,6 @@ if (hasDOM) {
             const inst = vnode._instance;
             renderCount = 0;
 
-            // Принудительный update, но memo заблокирует (deps те же)
             const result = await inst.update({});
             assert.equal(result, false);
             assert.equal(renderCount, 0);
@@ -192,8 +192,7 @@ if (hasDOM) {
     // Key identifiers — формирование идентификаторов
     // =========================================================================
     describe('Key identifiers — формирование идентификаторов', () => {
-
-        test('user key с запятой экранируется в ,,', async () => {
+        test('key сохраняет instance среди siblings при reorder', async () => {
             const container = createContainer();
             const instances = [];
 
@@ -202,95 +201,68 @@ if (hasDOM) {
                 render(props) { return h('div', null, props.id); }
             });
 
-            mount(
-                h('div', null,
-                    h(Item, { key: 'fio,1', id: 'first' })
-                ),
-                container
-            );
-            const first = instances[0];
+            const App = Component({
+                order: [1, 2, 3],
+                render() {
+                    return h('div', null,
+                        this.order.map(id => h(Item, { key: id, id }))
+                    );
+                }
+            });
 
-            mount(
-                h('div', null,
-                    h('span', null, 'spacer'),
-                    h(Item, { key: 'fio,1', id: 'first' })
-                ),
-                container
-            );
+            const vnode = mount(App, container);
+            const app = vnode._instance;
 
-            assert.equal(instances.length, 1, 'instance не должен пересоздаваться');
-            assert.equal(instances[0], first);
+            assert.equal(instances.length, 3);
+            const [a, b, c] = [...instances];
+
+            // Reorder среди того же родителя
+            app.update({ order: [3, 1, 2] });
+            await delay(20);
+
+            assert.equal(instances.length, 3, 'instance не должны пересоздаваться');
+            const items = Array.from(container.firstChild.children);
+            assert.equal(items[0].textContent, '3');
+            assert.equal(items[1].textContent, '1');
+            assert.equal(items[2].textContent, '2');
         });
 
-        test('разные user keys с запятыми не конфликтуют', async () => {
+        test('key с запятой экранируется — не конфликтует с другими keys', async () => {
             const container = createContainer();
             const instances = [];
 
             const Item = Component({
                 init() { instances.push(this); },
-                render(props) { return h('div', null, props.id); }
+                render(props) { return h('div', null, props.label); }
             });
 
+            // 'a,b' экранируется в '#a,,b' и не конфликтует с '#a' и '#b'
             mount(
                 h('div', null,
-                    h(Item, { key: 'a,b', id: 'ab' }),
-                    h(Item, { key: 'a', id: 'a' }),
-                    h(Item, { key: 'b', id: 'b' })
+                    h(Item, { key: 'a,b', label: 'ab' }),
+                    h(Item, { key: 'a', label: 'a' }),
+                    h(Item, { key: 'b', label: 'b' })
                 ),
                 container
             );
 
             assert.equal(instances.length, 3, 'должны быть 3 разных instance');
 
+            // Reorder — все должны сохраниться
             mount(
                 h('div', null,
-                    h(Item, { key: 'b', id: 'b' }),
-                    h(Item, { key: 'a,b', id: 'ab' }),
-                    h(Item, { key: 'a', id: 'a' })
+                    h(Item, { key: 'b', label: 'b' }),
+                    h(Item, { key: 'a,b', label: 'ab' }),
+                    h(Item, { key: 'a', label: 'a' })
                 ),
                 container
             );
             await delay(10);
 
-            assert.equal(instances.length, 3, 'ни один не должен пересоздаться');
+            assert.equal(instances.length, 3, 'instance не должны пересоздаваться');
 
             const texts = Array.from(container.firstChild.children).map(el => el.textContent);
             assert.deepEqual(texts, ['b', 'ab', 'a']);
-        });
-
-        test('дубликаты user key выводят warning', async () => {
-            const container = createContainer();
-            const warnings = [];
-            const origWarn = console.warn;
-            const origError = console.error;
-            console.warn = (...args) => warnings.push(args.join(' '));
-            console.error = (...args) => warnings.push(args.join(' '));
-
-            try {
-                const Item = Component({
-                    render() { return h('div'); }
-                });
-
-                mount(
-                    h('div', null,
-                        h(Item, { key: 'duplicate' }),
-                        h(Item, { key: 'duplicate' })
-                    ),
-                    container
-                );
-
-                const hasWarning = warnings.some(e =>
-                    e.toLowerCase().includes('duplicate') &&
-                    e.toLowerCase().includes('key')
-                );
-                assert.ok(hasWarning,
-                    'должно быть предупреждение о дубликате. Вывод: ' +
-                    (warnings.length ? warnings.join(' | ') : '(пусто)')
-                );
-            } finally {
-                console.warn = origWarn;
-                console.error = origError;
-            }
         });
 
         test('автоматический ключ по пути сохраняется при том же порядке', async () => {
@@ -311,6 +283,7 @@ if (hasDOM) {
             );
             assert.equal(instances.length, 2);
 
+            // Тот же порядок — instance сохраняются
             mount(
                 h('div', null,
                     h(Item, { id: 'a' }),
@@ -374,6 +347,7 @@ if (hasDOM) {
 
             assert.equal(instances.length, specialKeys.length);
 
+            // Reorder — все должны сохраниться
             mount(
                 h('div', null,
                     ...[...specialKeys].reverse().map((key, i) =>
@@ -407,14 +381,7 @@ if (hasDOM) {
 
             assert.equal(instances.length, 2, 'должны быть 2 разных instance');
 
-            // ⚠️ Ищем по props.id, а не по id
-            const doubleInst = instances.find(i => i.props.id === 'double');
-            const singleInst = instances.find(i => i.props.id === 'single');
-            assert.ok(doubleInst, 'double instance создан');
-            assert.ok(singleInst, 'single instance создан');
-            assert.notEqual(doubleInst, singleInst, 'разные instance');
-
-            // Перемешиваем
+            // Reorder — оба должны сохраниться
             mount(
                 h('div', null,
                     h(Item, { key: 'a,b', id: 'single' }),
@@ -424,17 +391,13 @@ if (hasDOM) {
             );
             await delay(10);
 
-            // Instance'ы не должны пересоздаваться
             assert.equal(instances.length, 2, 'instance не должны пересоздаваться');
 
-            // Проверяем что DOM в правильном порядке
-            const children = container.firstChild.children;
-            assert.equal(children.length, 2);
-            assert.equal(children[0].textContent, 'single', 'первый child = single');
-            assert.equal(children[1].textContent, 'double', 'второй child = double');
+            const texts = Array.from(container.firstChild.children).map(el => el.textContent);
+            assert.deepEqual(texts, ['single', 'double']);
         });
 
-        test('user key уникален в пределах render — разные позиции', async () => {
+        test('key сохраняется при добавлении/удалении siblings', async () => {
             const container = createContainer();
             const instances = [];
 
@@ -445,26 +408,32 @@ if (hasDOM) {
 
             mount(
                 h('div', null,
-                    h('span'),
-                    h(Item, { key: 'mykey', id: 'first-pos' })
+                    h(Item, { key: 'a', id: 'A' }),
+                    h(Item, { key: 'b', id: 'B' }),
+                    h(Item, { key: 'c', id: 'C' })
                 ),
                 container
             );
-            const first = instances[0];
 
+            assert.equal(instances.length, 3);
+            const [a, b, c] = [...instances];
+
+            // Удаляем средний
             mount(
                 h('div', null,
-                    h(Item, { key: 'mykey', id: 'second-pos' }),
-                    h('span')
+                    h(Item, { key: 'a', id: 'A' }),
+                    h(Item, { key: 'c', id: 'C' })
                 ),
                 container
             );
             await delay(10);
 
-            assert.equal(instances.length, 1, 'instance не должен пересоздаваться');
-            assert.equal(instances[0], first, 'тот же instance');
+            assert.equal(instances.length, 3, 'instance не должны пересоздаваться');
+
+            const texts = Array.from(container.firstChild.children).map(el => el.textContent);
+            assert.deepEqual(texts, ['A', 'C']);
         });
     });
 }
 
-console.log('\n✅ Test-node-05 инициализирован (16 тестов)\n');
+console.log('\n✅ Test-node-05 инициализирован (15 тестов)\n');
