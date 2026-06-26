@@ -108,15 +108,18 @@ if (hasDOM) {
             assert.equal(inst.name, 'test');
         });
 
-        test('методы автобиндятся к instance', () => {
+        test('методы автобиндятся к instance', async () => {
+            const container = createContainer();
             const MyComp = Component({
                 value: 10,
                 getValue() { return this.value; },
-                render() { return h('div'); }
+                render() { return h('div', null, this.getValue()); }
             });
-            const inst = new MyComp();
+            const vnode = mount(MyComp, container);
+            const inst = vnode._instance;
             const fn = inst.getValue;
             assert.equal(fn(), 10);
+            assert.equal(container.textContent, '10');
         });
     });
 
@@ -560,7 +563,7 @@ if (hasDOM) {
     });
 
     // =========================================================================
-    // Refresh
+    // refresh()
     // =========================================================================
     describe('refresh()', () => {
         test('обновляет все корневые компоненты', async () => {
@@ -588,6 +591,143 @@ if (hasDOM) {
             const time = await refresh();
             assert.equal(typeof time, 'number');
             assert.ok(time >= 0);
+        });
+    });
+
+    // =========================================================================
+    // Memo и reconcile — защита от регресса skip reconcile
+    // =========================================================================
+    describe('Memo и reconcile', () => {
+        test('memo() блокирует только текущий компонент — дети обновляются', async () => {
+            const container = createContainer();
+            let childRenders = 0;
+            let parentRenders = 0;
+
+            const Child = Component({
+                render() {
+                    childRenders++;
+                    return h('div', null, 'child');
+                }
+            });
+
+            const Parent = Component({
+                value: 0,
+                memo() { return [this.value]; },  // блокирует render при тех же deps
+                render() {
+                    parentRenders++;
+                    return h(Child);
+                }
+            });
+
+            const vnode = mount(Parent, container);
+            const parent = vnode._instance;
+
+            // После первого mount: parent=1, child=1
+            assert.equal(parentRenders, 1);
+            assert.equal(childRenders, 1);
+
+            // Принудительный update без изменения value
+            // memo() вернёт те же deps → shouldRender = false
+            parent.update({});
+            await delay(10);
+
+            // ⚡ Ключевая проверка по спеке:
+            // - Parent render заблокирован (memo) — остаётся 1
+            // - Child должен пройти свою цепочку — становится 2
+            assert.equal(parentRenders, 1, 'parent render заблокирован memo');
+            assert.equal(childRenders, 2, 'child должен перерендериться');
+        });
+
+        test('context propagation работает через memo-защищённый компонент', async () => {
+            const container = createContainer();
+            let childRenders = 0;
+            let lastTheme = null;
+
+            const ThemeReader = Component({
+                render() {
+                    childRenders++;
+                    lastTheme = this.context('theme');
+                    return h('div', null, lastTheme);
+                }
+            });
+
+            const MemoWrapper = Component({
+                value: 0,
+                memo() { return [this.value]; },  // блокирует render
+                render() {
+                    return h(ThemeReader);  // Ребёнок читает контекст
+                }
+            });
+
+            const ThemeProvider = Component({
+                theme: 'light',
+                context: {
+                    theme() { return this.theme; },
+                    toggleTheme() {
+                        this.update({ theme: this.theme === 'light' ? 'dark' : 'light' });
+                    }
+                },
+                render() {
+                    return h(MemoWrapper);
+                }
+            });
+
+            const vnode = mount(ThemeProvider, container);
+            const provider = vnode._instance;
+
+            // После первого mount: child=1, theme='light'
+            assert.equal(childRenders, 1);
+            assert.equal(lastTheme, 'light');
+            assert.equal(container.textContent, 'light');
+
+            // Меняем тему у провайдера
+            provider.update({ theme: 'dark' });
+            await delay(10);
+
+            // ThemeProvider ререндерится
+            // MemoWrapper: memo возвращает те же deps [0] → shouldRender = false
+            // НО: ThemeReader должен перечитать контекст!
+            assert.equal(childRenders, 2, 'ThemeReader должен перерендериться');
+            assert.equal(lastTheme, 'dark', 'ThemeReader должен получить новую тему');
+            assert.equal(container.textContent, 'dark');
+        });
+
+        test('memo() не блокирует onUpdated родителя', async () => {
+            const container = createContainer();
+            let parentUpdated = 0;
+            let parentRenders = 0;
+
+            const Parent = Component({
+                value: 0,
+                memo() { return [this.value]; },
+                onUpdated() { parentUpdated++; },
+                render() {
+                    parentRenders++;
+                    return h('div', null, this.value);
+                }
+            });
+
+            const vnode = mount(Parent, container);
+            const parent = vnode._instance;
+
+            // onUpdated не вызывается при первом mount
+            assert.equal(parentUpdated, 0);
+            assert.equal(parentRenders, 1);
+
+            // Изменяем value → shouldRender = true
+            parent.update({ value: 1 });
+            await delay(10);
+
+            assert.equal(parentRenders, 2);
+            assert.equal(parentUpdated, 1, 'onUpdated должен вызваться когда render прошёл');
+
+            // Принудительный update без изменения → shouldRender = false
+            parent.update({});
+            await delay(10);
+
+            // render заблокирован → onUpdated НЕ вызывается
+            assert.equal(parentRenders, 2, 'render заблокирован memo');
+            assert.equal(parentUpdated, 1, 'onUpdated не должен вызываться когда render заблокирован');
         });
     });
 }
