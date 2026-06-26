@@ -268,17 +268,9 @@ function attachInstanceAPI(inst) {
                 }
                 checkDuplicateKeys(newVdom, '');
             } else {
-                // ⚡ БЫСТРЫЙ ПУТЬ: memo заблокировал render — пропустить reconcile
+                // memo заблокировал render — используем старый vnode
+                // ⚠️ НЕ делаем early return — reconcile обходит детей чтобы они обновились
                 newVdom = oldVdom;
-
-                const resolvers = this._updateResolvers;
-                this._updateResolvers = null;
-                if (resolvers) {
-                    for (let i = 0; i < resolvers.length; i++) {
-                        resolvers[i](false);
-                    }
-                }
-                return;  // Не вызывать reconcile — дети не изменились
             }
 
             const oldNodes = this._nodes;
