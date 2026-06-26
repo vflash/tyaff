@@ -234,10 +234,19 @@ function attachInstanceAPI(inst) {
                 } finally {
                     this._isRendering = false;
                 }
-                // ⚠️ Проверяем дубликаты в новом vnode (отдельный Map)
                 checkDuplicateKeys(newVdom, '');
             } else {
+                // ⚡ БЫСТРЫЙ ПУТЬ: memo заблокировал render — пропустить reconcile
                 newVdom = oldVdom;
+
+                const resolvers = this._updateResolvers;
+                this._updateResolvers = null;
+                if (resolvers) {
+                    for (let i = 0; i < resolvers.length; i++) {
+                        resolvers[i](false);
+                    }
+                }
+                return;  // Не вызывать reconcile — дети не изменились
             }
 
             const oldNodes = this._nodes;
@@ -281,6 +290,19 @@ function attachInstanceAPI(inst) {
             );
             return Promise.resolve(false);
         }
+
+        // ⚡ БЫСТРАЯ ПРОВЕРКА: update() без patch + memo() → проверить зависимости
+        if (patch === undefined && this._definition.memo) {
+            const newDeps = this._definition.memo.call(this, this.props);
+            if (this._prevMemo && newDeps.length === this._prevMemo.length) {
+                let same = true;
+                for (let i = 0; i < newDeps.length; i++) {
+                    if (newDeps[i] !== this._prevMemo[i]) { same = false; break; }
+                }
+                if (same) return Promise.resolve(false);  // Ничего не изменилось
+            }
+        }
+
         if (patch && typeof patch === 'object') {
             if (Object.keys(patch).length === 0) {
                 if (this._isInitializing) return Promise.resolve(false);
