@@ -523,6 +523,185 @@ if (hasDOM) {
             assert.ok(container.textContent.includes('alice@example.com'));
         });
     });
+
+    // =========================================================================
+    // MOVE BETWEEN PARENTS — минимальный тест сохранения instance
+    // =========================================================================
+    describe('Move between parents — сохранение instance', () => {
+        test('instance сохраняется при перемещении между родителями через conditional rendering', async () => {
+            const container = createContainer();
+            const instances = [];
+
+            const Movable = Component({
+                init() {
+                    instances.push(this);
+                },
+                render() {
+                    return h('div', { className: 'movable' }, 'M');
+                }
+            });
+
+            const App = Component({
+                position: 'left',
+                render() {
+                    return h('div', null,
+                        h('div', { id: 'L' },
+                            this.position === 'left' && h(Movable, { key: 'mv' })
+                        ),
+                        h('div', { id: 'R' },
+                            this.position === 'right' && h(Movable, { key: 'mv' })
+                        )
+                    );
+                }
+            });
+
+            const vnode = mount(App, container);
+            const app = vnode._instance;
+
+            // Initial render: 1 instance
+            assert.equal(instances.length, 1, 'После initial render должен быть 1 instance');
+
+            // Перемещаем вправо
+            app.update({ position: 'right' });
+            await delay(20);
+
+            // Должен остаться тот же instance, не создаваться новый
+            assert.equal(instances.length, 1,
+                'Instance не должен пересоздаваться при перемещении — ожидался 1, получено ' + instances.length);
+
+            // Перемещаем влево
+            app.update({ position: 'left' });
+            await delay(20);
+
+            // Всё ещё тот же instance
+            assert.equal(instances.length, 1,
+                'Instance должен сохраняться при многократных перемещениях');
+
+            // Проверяем что DOM корректный
+            assert.ok(container.querySelector('#L .movable'),
+                'Movable должен быть в div#L');
+            assert.equal(container.querySelector('#R .movable'), null,
+                'Movable не должен быть в div#R');
+        });
+
+        test('state сохраняется при перемещении между родителями', async () => {
+            const container = createContainer();
+
+            const Stateful = Component({
+                counter: 0,
+                increment() {
+                    this.update({ counter: this.counter + 1 });
+                },
+                render() {
+                    return h('button', {
+                        className: 'stateful',
+                        onClick: () => this.increment()
+                    }, 'Count: ' + this.counter);
+                }
+            });
+
+            const App = Component({
+                side: 'left',
+                render() {
+                    return h('div', null,
+                        h('div', { id: 'left' },
+                            this.side === 'left' && h(Stateful, { key: 'stateful' })
+                        ),
+                        h('div', { id: 'right' },
+                            this.side === 'right' && h(Stateful, { key: 'stateful' })
+                        )
+                    );
+                }
+            });
+
+            const vnode = mount(App, container);
+            const app = vnode._instance;
+            await delay(10);
+
+            // Кликаем 3 раза пока в left
+            const btn = container.querySelector('.stateful');
+            btn.click(); btn.click(); btn.click();
+            await delay(20);
+
+            assert.equal(container.querySelector('.stateful').textContent, 'Count: 3',
+                'Счётчик должен быть 3 после кликов');
+
+            // Перемещаем в right
+            app.update({ side: 'right' });
+            await delay(20);
+
+            // State должен сохраниться
+            assert.equal(container.querySelector('.stateful').textContent, 'Count: 3',
+                'State должен сохраняться при перемещении — ожидалось "Count: 3"');
+
+            // Ещё 2 клика
+            container.querySelector('.stateful').click();
+            container.querySelector('.stateful').click();
+            await delay(20);
+
+            assert.equal(container.querySelector('.stateful').textContent, 'Count: 5',
+                'Счётчик должен быть 5 после дополнительных кликов');
+        });
+        
+        test('instance сохраняется при перемещении R → L (обратное направление)', async () => {
+            const container = createContainer();
+            const instances = [];
+
+            const Movable = Component({
+                init() {
+                    instances.push(this);
+                },
+                render() {
+                    return h('div', { className: 'movable' }, 'M');
+                }
+            });
+
+            const App = Component({
+                position: 'right',  // ⚡ Начинаем с RIGHT
+                render() {
+                    return h('div', null,
+                        h('div', { id: 'L' },
+                            this.position === 'left' && h(Movable, { key: 'mv' })
+                        ),
+                        h('div', { id: 'R' },
+                            this.position === 'right' && h(Movable, { key: 'mv' })
+                        )
+                    );
+                }
+            });
+
+            const vnode = mount(App, container);
+            const app = vnode._instance;
+
+            // Initial render: Movable в R
+            assert.equal(instances.length, 1, 'После initial render должен быть 1 instance');
+            assert.ok(container.querySelector('#R .movable'), 'Movable должен быть в div#R');
+            assert.equal(container.querySelector('#L .movable'), null, 'Movable не должен быть в div#L');
+
+            // Перемещаем в L (R → L)
+            app.update({ position: 'left' });
+            await delay(20);
+
+            // Должен остаться тот же instance
+            assert.equal(instances.length, 1,
+                'Instance не должен пересоздаваться при перемещении R → L — ожидался 1, получено ' + instances.length);
+
+            assert.ok(container.querySelector('#L .movable'), 'Movable должен быть в div#L');
+            assert.equal(container.querySelector('#R .movable'), null, 'Movable не должен быть в div#R');
+
+            // Перемещаем обратно в R (L → R)
+            app.update({ position: 'right' });
+            await delay(20);
+
+            // Всё ещё тот же instance
+            assert.equal(instances.length, 1,
+                'Instance должен сохраняться при многократных перемещениях');
+
+            assert.ok(container.querySelector('#R .movable'), 'Movable должен быть в div#R');
+            assert.equal(container.querySelector('#L .movable'), null, 'Movable не должен быть в div#L');
+        });
+    });
+
 }
 
 console.log('\n✅ Test-node-03 инициализирован (8 тестов)\n');

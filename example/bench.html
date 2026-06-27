@@ -884,7 +884,8 @@ async function benchMoveBetweenParents() {
             }
         },
         async (ctx) => {
-            tyaffOk = ctx.inst._c === MOVES + 1;
+            const hasContent = (el) => el && el.children.length > 0;
+            tyaffOk = hasContent(ctx.c.querySelector('#L')) !== hasContent(ctx.c.querySelector('#R'));
             mount(null, ctx.c);
             arena.removeChild(ctx.c);
         }
