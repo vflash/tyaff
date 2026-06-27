@@ -9,3 +9,7 @@
 .idea
 
 node_modules/
+
+# aica agent
+.ai-log/
+ai-patch-*.txt
