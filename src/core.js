@@ -805,23 +805,30 @@ function unmountVdom(vnode, seen) {
 // ============================================================================
 
 function syncDOMChildren(parentDOM, oldNodes, newNodes) {
+    const newLen = newNodes.length;  // ⚡ Кэш длины
+    const oldLen = oldNodes.length;  // ⚡ Кэш длины
     let oi = 0;
-    for (let i = 0; i < newNodes.length; i++) {
+
+    for (let i = 0; i < newLen; i++) {
         const n = newNodes[i];
-        const o = oi < oldNodes.length ? oldNodes[oi] : null;
+        const o = oi < oldLen ? oldNodes[oi] : null;
+
         if (n === o) {
             oi++;
         } else {
             let ref = null;
-            for (let j = oi; j < oldNodes.length; j++) {
-                if (oldNodes[j] && oldNodes[j].parentNode === parentDOM) {
-                    ref = oldNodes[j]; break;
+            for (let j = oi; j < oldLen; j++) {
+                const oldJ = oldNodes[j];  // ⚡ Кэш oldNodes[j]
+                if (oldJ && oldJ.parentNode === parentDOM) {
+                    ref = oldJ;
+                    break;
                 }
             }
             parentDOM.insertBefore(n, ref);
         }
     }
-    while (oi < oldNodes.length) {
+
+    while (oi < oldLen) {
         const o = oldNodes[oi++];
         if (o && o.parentNode === parentDOM) parentDOM.removeChild(o);
     }
