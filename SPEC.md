@@ -539,6 +539,40 @@ return h(Fragment, null,              // ,0
 );
 ```
 
+### Перемещение компонентов между родителями
+
+Компоненты с одинаковым `key` сохраняют instance при перемещении между разными родителями в пределах одного render:
+
+```javascript
+const App = Component({
+    position: 'left',
+    render() {
+        return h('div', null,
+            h('div', { id: 'L' },
+                this.position === 'left' && h(Child, { key: 'movable' })
+            ),
+            h('div', { id: 'R' },
+                this.position === 'right' && h(Child, { key: 'movable' })
+            )
+        );
+    }
+});
+
+app.update({ position: 'right' });
+// Instance Child сохранён, переместился из #L в #R
+```
+
+**Гарантии:**
+- Instance не пересоздаётся при перемещении
+- State сохраняется (counters, forms, selections)
+- DOM узлы перемещаются, не пересоздаются
+- Event listeners остаются привязанными
+- Lifecycle hooks (`onMounted`, `onUnmounted`) не вызываются при перемещении
+
+**Ограничения:**
+- Работает только в пределах одного render компонента
+- Требует одинаковый `key` в обоих местах
+
 ### Known limitations
 
 **render → null → render:**
