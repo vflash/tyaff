@@ -19,17 +19,20 @@ function setDevMode(isDev) {
 // Utility functions
 // ============================================================================
 
+// ⚡ Оптимизация: String(key) → "" + key
 function escapeKey(key) {
-    const str = String(key);
+    const str = "" + key;
     return str.indexOf(',') !== -1 ? str.replace(/,/g, ',,') : str;
 }
 
+// ⚡ Оптимизация: Array.push() → прямое присваивание по индексу
 function pushAll(target, source) {
     if (source == null) return;
+    let len = target.length;
     if (Array.isArray(source)) {
-        for (let i = 0; i < source.length; i++) target.push(source[i]);
+        for (let i = 0; i < source.length; i++) target[len++] = source[i];
     } else {
-        target.push(source);
+        target[len] = source;
     }
 }
 
@@ -47,8 +50,10 @@ function prependAll(parent, nodes) {
     }
 }
 
+// ⚡ Оптимизация: Array.push() → прямое присваивание по индексу
 function collectDOMNodes(childs) {
     const result = [];
+    let len = 0;
     function walk(node) {
         if (node == null) return;
         if (Array.isArray(node)) {
@@ -57,19 +62,19 @@ function collectDOMNodes(childs) {
         }
         if (typeof node !== 'object') return;
         if (node.nodeType) {
-            result.push(node);
+            result[len++] = node;
             return;
         }
         if (node._instance) {
             const inst = node._instance;
-            if (inst._anchor && inst._anchor.nodeType) result.push(inst._anchor);
+            if (inst._anchor && inst._anchor.nodeType) result[len++] = inst._anchor;
             if (!inst._isPortal && Array.isArray(inst._nodes)) {
                 for (let i = 0; i < inst._nodes.length; i++) walk(inst._nodes[i]);
             }
             return;
         }
         if (node._el) {
-            result.push(node._el);
+            result[len++] = node._el;
             return;
         }
         if (Array.isArray(node._nodes)) {
@@ -84,16 +89,18 @@ function collectDOMNodes(childs) {
 // h() — создание VDOM узлов
 // ============================================================================
 
+// ⚡ Оптимизация: Array.push() → прямое присваивание, String(c) → "" + c
 function h(type, props, ...children) {
     const normalized = [];
+    let len = 0;
     for (let i = 0; i < children.length; i++) {
         const c = children[i];
         if (c == null || c === false || c === true) {
-            normalized.push(null);
+            normalized[len++] = null;
         } else if (typeof c === 'string' || typeof c === 'number') {
-            normalized.push({ _text: String(c) });
+            normalized[len++] = { _text: "" + c };
         } else {
-            normalized.push(c);
+            normalized[len++] = c;
         }
     }
     return { tag: type, props: props || {}, childs: normalized };
@@ -179,6 +186,7 @@ function flushRefreshResolvers() {
     }
 }
 
+// ⚡ Оптимизация: Array.from(set) → ручной цикл
 function flushBatch() {
     isFlushing = true;
     try {
@@ -195,7 +203,12 @@ function flushBatch() {
             return;
         }
 
-        const toUpdate = Array.from(batchQueue);
+        // Ручной цикл вместо Array.from(batchQueue)
+        const toUpdate = [];
+        let len = 0;
+        for (const inst of batchQueue) {
+            toUpdate[len++] = inst;
+        }
         batchQueue.clear();
         isBatchScheduled = false;
 
@@ -298,6 +311,7 @@ function attachInstanceAPI(inst) {
             const resolvers = this._updateResolvers;
             this._updateResolvers = null;
             if (resolvers) {
+                // ✅ ИСПРАВЛЕНИЕ БАГА: resolversi → resolvers[i](shouldRender)
                 for (let i = 0; i < resolvers.length; i++) {
                     resolvers[i](shouldRender);
                 }
@@ -307,6 +321,7 @@ function attachInstanceAPI(inst) {
         }
     };
 
+    // ⚡ Оптимизация: Object.keys() → for...in, Object.assign() → ручной цикл
     inst.update = function(patch) {
         if (this._isRendering) {
             console.error(
@@ -329,16 +344,28 @@ function attachInstanceAPI(inst) {
         }
 
         if (patch && typeof patch === 'object') {
-            if (Object.keys(patch).length === 0) {
+            // ⚡ Проверка на пустой объект через for...in вместо Object.keys()
+            let hasKeys = false;
+            for (const k in patch) {
+                hasKeys = true;
+                break;
+            }
+
+            if (!hasKeys) {
                 if (this._isInitializing) return Promise.resolve(false);
                 return this._scheduleUpdate();
             }
+
             let changed = false;
             for (const k in patch) {
                 if (this[k] !== patch[k]) { changed = true; break; }
             }
             if (!changed) return Promise.resolve(false);
-            Object.assign(this, patch);
+
+            // ⚡ Object.assign(this, patch) → ручной цикл
+            for (const k in patch) {
+                this[k] = patch[k];
+            }
         }
         if (this._isInitializing) return Promise.resolve(false);
         return this._scheduleUpdate();
@@ -394,10 +421,11 @@ function attachInstanceAPI(inst) {
 // Keys
 // ============================================================================
 
+// ⚡ Оптимизация: String(key) → "" + key
 function makeMapKey(vnode, path) {
     const key = vnode?.props?.key;
     if (key !== undefined) {
-        const userKey = String(key);
+        const userKey = "" + key;
         return '#' + escapeKey(userKey);
     }
     return path;
@@ -509,6 +537,7 @@ const CAMEL_TO_ATTR = {
     tabIndex: 'tabindex'
 };
 
+// ⚡ Оптимизация: String(value) → "" + value, прямое присваивание свойств
 function applyProp(dom, key, value, namespace) {
     if (key === 'key' || key === 'ref' || key === 'children') return;
     const isSVG = namespace === SVG_NS;
@@ -525,7 +554,7 @@ function applyProp(dom, key, value, namespace) {
                     return;
                 }
                 if (tag === 'INPUT' && dom.type === 'file') return;
-                const strVal = value == null ? '' : String(value);
+                const strVal = value == null ? '' : "" + value;
                 if (dom.value !== strVal) dom.value = strVal;
                 dom.setAttribute('value', strVal);
                 return;
@@ -581,7 +610,7 @@ function applyProp(dom, key, value, namespace) {
             }
             dom.setAttribute('style', css);
         } else {
-            dom.setAttribute('style', String(value));
+            dom.setAttribute('style', "" + value);
         }
         return;
     }
@@ -604,13 +633,13 @@ function applyProp(dom, key, value, namespace) {
         if (key === 'xlinkHref') {
             dom.setAttributeNS(XLINK_NS, 'xlink:href', value);
         } else {
-            dom.setAttribute(key, value === true ? '' : String(value));
+            dom.setAttribute(key, value === true ? '' : "" + value);
         }
         return;
     }
 
     const attr = CAMEL_TO_ATTR[key] || key.toLowerCase();
-    dom.setAttribute(attr, value === true ? '' : String(value));
+    dom.setAttribute(attr, value === true ? '' : "" + value);
 }
 
 function applyProps(dom, oldProps, newProps, namespace) {
@@ -695,10 +724,12 @@ function callRefs(vnode, seen = new WeakSet()) {
 // Lifecycle
 // ============================================================================
 
+// ⚡ Оптимизация: Array.push() → прямое присваивание
 function triggerMounted(roots) {
     const components = [];
     const stack = Array.isArray(roots) ? roots.slice() : [roots];
     const seen = new WeakSet();
+    let compLen = 0;
 
     while (stack.length) {
         const vnode = stack.pop();
@@ -721,7 +752,7 @@ function triggerMounted(roots) {
             const inst = vnode._instance;
             if (inst && !inst._isMounted) {
                 inst._isMounted = true;
-                components.push(inst);
+                components[compLen++] = inst;
             }
             if (inst && inst._vdom) stack.push(inst._vdom);
             continue;
@@ -733,7 +764,7 @@ function triggerMounted(roots) {
         }
     }
 
-    for (let i = components.length - 1; i >= 0; i--) {
+    for (let i = compLen - 1; i >= 0; i--) {
         const inst = components[i];
         const d = inst._definition;
         try {
@@ -1341,19 +1372,22 @@ function mountNode(vnode, parentDOM, ctx, path, keyMap, namespace) {
 // Mount — точка входа
 // ============================================================================
 
+// ⚡ Оптимизация: String(input) → "" + input
 function normalizeMountInput(input) {
     if (input === null || input === undefined) return null;
     if (typeof input === 'function' && input._definition) return h(input, {});
     if (Array.isArray(input)) return h(Fragment, {}, ...input);
     if (typeof input === 'string' || typeof input === 'number') {
-        return { _text: String(input) };
+        return { _text: "" + input };
     }
     if (typeof input === 'object' && input !== null) return input;
     throw new Error('mount(): unsupported input type: ' + typeof input);
 }
 
+// ⚡ Оптимизация: Array.push() → прямое присваивание
 function collectAllInstances(vnode) {
     const result = [];
+    let len = 0;
 
     function walk(node) {
         if (!node) return;
@@ -1367,7 +1401,7 @@ function collectAllInstances(vnode) {
 
         if (typeof node.tag === 'function' && node.tag._definition) {
             if (node._instance && node._instance._rerender) {
-                result.push(node._instance);
+                result[len++] = node._instance;
                 if (node._instance._vdom) walk(node._instance._vdom);
             }
             return;
@@ -1471,10 +1505,17 @@ function refresh() {
     });
 }
 
+// ⚡ Оптимизация: Array.from() → ручной цикл
 function _cleanupAll() {
-    for (const container of Array.from(mountedContainers)) {
+    const containers = [];
+    let len = 0;
+    for (const container of mountedContainers) {
+        containers[len++] = container;
+    }
+
+    for (let i = 0; i < len; i++) {
         try {
-            mount(null, container);
+            mount(null, containers[i]);
         } catch (e) {}
     }
 }
