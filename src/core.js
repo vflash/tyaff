@@ -286,9 +286,10 @@ function attachInstanceAPI(inst) {
         }
 
         const oldVdom = inst._vdom;
-        let newVdom;
+        let newNodes;
 
         if (shouldRender) {
+            let newVdom;
             inst._keyMap.clear();
             if (oldVdom) populateKeyMap(oldVdom, '', inst._keyMap);
             inst._isRendering = true;
@@ -298,30 +299,41 @@ function attachInstanceAPI(inst) {
                 inst._isRendering = false;
             }
             checkDuplicateKeys(newVdom, '');
+            const oldNodes = inst._nodes;
+            const wasFirstRender = !oldVdom;
+            newNodes = reconcile(
+                oldVdom, newVdom, inst._parentDOM, inst, '',
+                inst._keyMap, inst._namespace
+            );
+            const flat = Array.isArray(newNodes) ? newNodes : (newNodes ? [newNodes] : []);
+            if (!wasFirstRender && inst._parentDOM) {
+                syncDOMChildren(inst._parentDOM, oldNodes, flat);
+            }
+            inst._nodes = flat;
+            inst._vdom = newVdom;
+            if (!wasFirstRender && d.onUpdated) {
+                d.onUpdated.call(inst);
+            }
         } else {
-            // memo заблокировал render — используем старый vnode
-            // ⚠️ НЕ делаем early return — reconcile обходит детей чтобы они обновились
-            newVdom = oldVdom;
-        }
-
-        const oldNodes = inst._nodes;
-        const wasFirstRender = !oldVdom;
-
-        const newNodes = reconcile(
-            oldVdom, newVdom, inst._parentDOM, inst, '',
-            inst._keyMap, inst._namespace
-        );
-        const flat = Array.isArray(newNodes) ? newNodes : (newNodes ? [newNodes] : []);
-
-        if (!wasFirstRender && inst._parentDOM) {
-            syncDOMChildren(inst._parentDOM, oldNodes, flat);
-        }
-
-        inst._nodes = flat;
-        inst._vdom = newVdom;
-
-        if (shouldRender && !wasFirstRender && d.onUpdated) {
-            d.onUpdated.call(inst);
+            // ⚡ memo-skip: целевой обход дочерних компонентов и порталов
+            // Пропускаем: render(), checkDuplicateKeys, populateKeyMap, keyMap.clear()
+            // Пропускаем: reconcile для HTML/Fragment/текст (props не изменились — vnode тот же)
+            // Дети-компоненты получают _rerender → props() → memo() → возможно render()
+            // onUpdated НЕ вызывается (memo заблокировал render)
+            // inst._vdom остаётся oldVdom (не изменился)
+            inst._isRendering = true;
+            try {
+                newNodes = refreshMemoSubtree(
+                    oldVdom, inst._parentDOM, inst, inst._namespace
+                );
+            } finally {
+                inst._isRendering = false;
+            }
+            const flat = Array.isArray(newNodes) ? newNodes : (newNodes ? [newNodes] : []);
+            if (inst._parentDOM) {
+                syncDOMChildren(inst._parentDOM, inst._nodes, flat);
+            }
+            inst._nodes = flat;
         }
 
         const resolvers = inst._updateResolvers;
@@ -1203,6 +1215,8 @@ function mountComponent(vnode, parentDOM, ctx, path, keyMap, namespace) {
 
     if (inst) {
         inst._incomingProps = buildIncomingProps(vnode.props, vnode.childs);
+        inst._cachedIncomingProps = inst._incomingProps;
+        inst._cachedPropsVnode = vnode;
         inst._parentContext = ctx;
         inst._parentDOM = parentDOM;
         inst._namespace = namespace;
@@ -1218,6 +1232,8 @@ function mountComponent(vnode, parentDOM, ctx, path, keyMap, namespace) {
     inst = new vnode.tag();
     attachInstanceAPI(inst);
     inst._incomingProps = buildIncomingProps(vnode.props, vnode.childs);
+    inst._cachedIncomingProps = inst._incomingProps;
+    inst._cachedPropsVnode = vnode;
     inst._parentContext = ctx;
     inst._parentDOM = parentDOM;
     inst._namespace = namespace;
@@ -1246,7 +1262,15 @@ function mountComponent(vnode, parentDOM, ctx, path, keyMap, namespace) {
 function reconcileComponent(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespace) {
     const inst = oldVnode._instance;
     newVnode._instance = inst;
-    inst._incomingProps = buildIncomingProps(newVnode.props, newVnode.childs);
+    // ⚡ Оптимизация memo-skip: переиспользуем _incomingProps если тот же vnode
+    // В memo-skip path oldVnode === newVnode → props не изменились → кэш валиден
+    if (inst._cachedPropsVnode === newVnode) {
+        inst._incomingProps = inst._cachedIncomingProps;
+    } else {
+        inst._incomingProps = buildIncomingProps(newVnode.props, newVnode.childs);
+        inst._cachedIncomingProps = inst._incomingProps;
+        inst._cachedPropsVnode = newVnode;
+    }
     inst._parentContext = ctx;
     inst._parentDOM = parentDOM;
     inst._namespace = namespace;
@@ -1298,6 +1322,51 @@ function mountFragment(vnode, parentDOM, ctx, path, keyMap, namespace) {
     }
 
     return nodes;
+}
+
+// ⚡ Оптимизация memo-skip: целевой обход поддерева без полноценного reconcile
+// Вызывает _rerender только для дочерних компонентов и порталов.
+// Пропускает: applyProps для HTML (props не изменились — vnode тот же),
+//             extractNodes, collectDOMNodes, type checks в reconcile.
+// Возвращает: DOM-узлы верхнего уровня (как reconcile) для обновления inst._nodes.
+// Контракт: vnode это старый vnode (memo-skip path), _el/_nodes уже установлены.
+function refreshMemoSubtree(vnode, parentDOM, ctx, namespace) {
+    if (vnode == null) return null;
+    if (Array.isArray(vnode)) {
+        const out = [];
+        for (let i = 0; i < vnode.length; i++) {
+            pushAll(out, refreshMemoSubtree(vnode[i], parentDOM, ctx, namespace));
+        }
+        return out;
+    }
+    if (vnode._text !== undefined) {
+        return vnode._el || null;
+    }
+    const tag = vnode.tag;
+    if (tag === Portal) {
+        reconcilePortal(vnode, vnode, parentDOM, ctx, '', null, namespace);
+        return vnode._instance._nodes;
+    }
+    if (typeof tag === 'function' && tag._definition) {
+        reconcileComponent(vnode, vnode, parentDOM, ctx, '', null, namespace);
+        return vnode._instance._nodes;
+    }
+    if (tag === Fragment) {
+        if (vnode.childs) {
+            for (let i = 0; i < vnode.childs.length; i++) {
+                refreshMemoSubtree(vnode.childs[i], parentDOM, ctx, namespace);
+            }
+        }
+        return vnode._nodes;
+    }
+    // HTML-тег: обходим детей с vnode._el как parentDOM, возвращаем _el
+    if (vnode.childs) {
+        const childParent = vnode._el;
+        for (let i = 0; i < vnode.childs.length; i++) {
+            refreshMemoSubtree(vnode.childs[i], childParent, ctx, namespace);
+        }
+    }
+    return vnode._el;
 }
 
 function reconcileFragment(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespace) {

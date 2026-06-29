@@ -1486,3 +1486,93 @@ if (patch === undefined && this._definition.memo) {
 3. **Ленивый reconcile** — проходить по дереву только до первого изменённого компонента
 
 **Дата последнего обновления:** 30 июня 2026
+---
+
+## Оптимизация memo-skip path через refreshMemoSubtree (2026-06-30)
+
+### Контекст
+
+При `memo()` блокировке `render()` компонент использует старый vnode (`newVdom = oldVdom`).
+Раньше `_doRerender` вызывал `reconcile(oldVdom, oldVdom, ...)` — полный reconcile
+с сравнением vnode с самим собой. Это работало (потому что `oldNode === newNode`
+попадает в быструю ветку в начале `reconcile`), но создавало лишние объекты и
+делало избыточные проверки.
+
+### Что изменилось
+
+**1. Новая функция `refreshMemoSubtree(vnode, parentDOM, ctx, namespace)`**
+
+Целевой обход поддерева для memo-skip path. В отличие от `reconcile`:
+- Пропускает `applyProps` для HTML (props не изменились — vnode тот же)
+- Пропускает `extractNodes`, `collectDOMNodes` для HTML
+- Пропускает 9+ проверок типов в `reconcile` (oldNode === newNode, tag checks, и т.д.)
+- Пропускает конкатенацию `path + ',' + i` (не использует path)
+- Вызывает `reconcileComponent(vnode, vnode, ...)` напрямую для компонентов
+- Вызывает `reconcilePortal(vnode, vnode, ...)` напрямую для порталов
+- Для Fragment/HTML просто рекурсивно обходит `vnode.childs`
+
+Возвращает DOM-узлы верхнего уровня (как `reconcile`) для обновления `inst._nodes`.
+
+**2. Кэширование `_incomingProps` в `reconcileComponent` и `mountComponent`**
+
+`buildIncomingProps(vnode.props, vnode.childs)` создаёт новый объект при каждом вызове.
+В memo-skip path `oldVnode === newVnode` (та же ссылка), значит props не изменились.
+Добавлен кэш:
+- `inst._cachedIncomingProps` — закэшированный результат `buildIncomingProps`
+- `inst._cachedPropsVnode` — vnode для которого кэш валиден
+- При `inst._cachedPropsVnode === newVnode` переиспользуем кэш
+- Иначе — пересоздаём и обновляем кэш
+
+Кэш инициализируется в `mountComponent` (и для found instance, и для new instance),
+чтобы первый memo-skip после mount уже использовал кэш.
+
+**3. Разделение путей в `_doRerender`**
+
+Раньше `shouldRender` и `memo-skip` шли через один `reconcile()` вызов.
+Теперь:
+- `shouldRender=true`: полный путь (render → checkDuplicateKeys → reconcile → syncDOMChildren → onUpdated)
+- `shouldRender=false` (memo-skip): `refreshMemoSubtree` → syncDOMChildren (без onUpdated, без keyMap.clear/populateKeyMap)
+
+### Поведение
+
+Спека соблюдена:
+- ✅ `memo()` блокирует render только текущего компонента
+- ✅ Дети-компоненты проходят свою цепочку `props() → memo() → render()`
+- ✅ Context propagation через memo-компоненты (дочерние компоненты получают обновлённый `_parentContext`)
+- ✅ `onUpdated` не вызывается при memo-skip
+- ✅ Keyed reconciliation внутри дочерних компонентов (у них свой keyMap, своя очистка)
+
+`keyMap` родителя в memo-skip path не используется и не очищается — это безопасно,
+потому что `refreshMemoSubtree` не вызывает `mountComponent` (который использует keyMap).
+Дочерние компоненты берутся через `oldVnode._instance` напрямую.
+
+### Замеры (Node.js v24, happy-dom)
+
+| Сценарий | Оригинал | Оптимизированный | Разница |
+|----------|----------|------------------|---------|
+| 1000 детей, без props, memo-skip | 1.347 ms/op | 1.278 ms/op | -5.1% |
+| 1000 детей с props(), memo-skip | 1.426 ms/op | 1.393 ms/op | -2.3% |
+| Дерево 3906 узлов, все memo-skip | 9.739 ms/op | 9.258 ms/op | -5.0% |
+| 500 детей | ~1.32 ms/op | ~1.29 ms/op | -2..4% |
+| 100 детей | ~1.14 ms/op | ~1.14 ms/op | паритет |
+
+Плюс сокращение аллокаций: кэш `_incomingProps` экономит 1-2 объекта на каждый
+дочерний компонент в memo-skip path.
+
+### Тесты
+
+Все 134 теста проходят (test-node-01..05). Включая критические:
+- `memo() блокирует только текущий компонент — дети обновляются`
+- `context propagation работает через memo-защищённый компонент`
+- `parent memo блокирует render, но дети проходят props() → memo() → render()`
+- `memo() не блокирует onUpdated родителя`
+- `memo hit: все дети имеют одинаковые props → никто не рендерится`
+
+### Реализованные пункты из "Альтернативных подходов"
+
+Эта оптимизация реализует пункты 1 и 2 из предыдущего раздела DEVNOTES:
+1. ✅ "Оптимизация внутри reconcile когда oldNode === newNode" — через `refreshMemoSubtree`
+2. ✅ "Кэширование" — кэш `_incomingProps` (не memo результатов, но близко по смыслу)
+
+Пункт 3 ("Ленивый reconcile — проходить по дереву только до первого изменённого компонента")
+не реализован — требует跟踪 dirty state, что усложнит архитектуру.
