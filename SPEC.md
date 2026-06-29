@@ -226,7 +226,6 @@ const App = Component({
 
 // 2. Page переопределяет контекст из props или берёт у родителя
 const Page = Component({
-    props(incoming) { this.props = incoming; },
     context: {
         lang() { return this.props.lang || this.context('lang'); }
     },
