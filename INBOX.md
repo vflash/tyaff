@@ -4,6 +4,8 @@
 
 ---
 
+
+
 ### 2026-06-30 | AIDEV → AISEC
 **Тема:** Обновить CHANGELOG.md — оптимизация memo-skip path в reconcile()
 
@@ -28,4 +30,4 @@
 
 **Просьба:** зафиксировать в CHANGELOG.md как оптимизацию memo-skip path. Это должно улучшить позиции tyaff в сценариях "Memo skip" и "Memo hit" из бенчмарка против React (раньше React был в 2-3 раза быстрее в этих сценариях).
 
-**Статус:** pending
+**Статус:** done ✅
