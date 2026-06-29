@@ -995,7 +995,11 @@ function reconcile(oldNode, newNode, parentDOM, ctx, path, keyMap, namespace) {
 
     if (oldIsText && newIsText) {
         if (oldNode._el) {
-            oldNode._el.nodeValue = newNode._text;
+            // ⚡ Оптимизация: skip nodeValue update если текст не изменился
+            // Критично для "Update 1 of 5000": 4999 из 5000 текстов не меняются
+            if (oldNode._text !== newNode._text) {
+                oldNode._el.nodeValue = newNode._text;
+            }
             newNode._el = oldNode._el;
             return newNode._el;
         }
@@ -1135,18 +1139,38 @@ function reconcileHTML(oldVnode, newVnode, parentDOM, ctx, path, keyMap, namespa
 
     const isSelect = dom.tagName === 'SELECT';
 
-    if (isSelect) {
-        const oldPropsWithoutValue = {};
-        for (const k in oldVnode.props) {
-            if (k !== 'value') oldPropsWithoutValue[k] = oldVnode.props[k];
+    // ⚡ Оптимизация: shallow props comparison — skip applyProps если props идентичны
+    // Критично для "Update 1 of 5000": 4999 div'ов с одинаковыми props {key:id}
+    // applyProps делает for...in дважды + applyProp вызовы — expensive
+    const oldProps = oldVnode.props;
+    const newProps = newVnode.props;
+    let propsChanged = false;
+    if (oldProps !== newProps) {
+        // Проверяем все ключи old + new
+        for (const k in oldProps) {
+            if (!(k in newProps) || oldProps[k] !== newProps[k]) { propsChanged = true; break; }
         }
-        const newPropsWithoutValue = {};
-        for (const k in newVnode.props) {
-            if (k !== 'value') newPropsWithoutValue[k] = newVnode.props[k];
+        if (!propsChanged) {
+            for (const k in newProps) {
+                if (!(k in oldProps)) { propsChanged = true; break; }
+            }
         }
-        applyProps(dom, oldPropsWithoutValue, newPropsWithoutValue, namespace);
-    } else {
-        applyProps(dom, oldVnode.props, newVnode.props, namespace);
+    }
+
+    if (propsChanged) {
+        if (isSelect) {
+            const oldPropsWithoutValue = {};
+            for (const k in oldVnode.props) {
+                if (k !== 'value') oldPropsWithoutValue[k] = oldVnode.props[k];
+            }
+            const newPropsWithoutValue = {};
+            for (const k in newVnode.props) {
+                if (k !== 'value') newPropsWithoutValue[k] = newVnode.props[k];
+            }
+            applyProps(dom, oldPropsWithoutValue, newPropsWithoutValue, namespace);
+        } else {
+            applyProps(dom, oldVnode.props, newVnode.props, namespace);
+        }
     }
 
     if (newVnode.tag === 'textarea') {
@@ -1348,8 +1372,21 @@ function refreshMemoSubtree(vnode, parentDOM, ctx, namespace) {
         return vnode._instance._nodes;
     }
     if (typeof tag === 'function' && tag._definition) {
-        reconcileComponent(vnode, vnode, parentDOM, ctx, '', null, namespace);
-        return vnode._instance._nodes;
+        // ⚡ Оптимизация: напрямую _rerender вместо reconcileComponent
+        // В memo-skip path vnode тот же → _incomingProps уже на instance (через кэш)
+        // Пропускаем: buildIncomingProps, _parentContext/_parentDOM/_namespace присваивания
+        // inst._parentContext не обновляем — но это безопасно: memo-skip у РОДИТЕЛЯ значит
+        // что родитель не рендерился → ctx родителя не изменился → _parentContext ребёнка валиден
+        const inst = vnode._instance;
+        if (inst) {
+            try {
+                inst._rerender();
+            } catch (err) {
+                const name = inst._definition?.name || 'Component';
+                console.error('❌ Error in component "' + name + '":\n', err);
+            }
+        }
+        return inst ? inst._nodes : null;
     }
     if (tag === Fragment) {
         if (vnode.childs) {

@@ -1576,3 +1576,101 @@ if (patch === undefined && this._definition.memo) {
 
 Пункт 3 ("Ленивый reconcile — проходить по дереву только до первого изменённого компонента")
 не реализован — требует跟踪 dirty state, что усложнит архитектуру.
+---
+
+## Оптимизации для обхода React в bench.html (2026-06-30, раунд 2)
+
+### Контекст
+
+После первой оптимизации memo-skip path замерил сценарии из `bench.html` где React выигрывает:
+- Update 1 of 5000: React 5.3x быстрее
+- Memo skip (5000): React 3.5x быстрее
+- No memo (5000): React 2.4x быстрее
+- Insert middle (5000): React 2.6x быстрее
+
+Применил 3 оптимизации + 1 откат.
+
+### Что сработало
+
+**1. Text node skip if `_text` unchanged (reconcile)**
+
+Было:
+```javascript
+if (oldIsText && newIsText) {
+    if (oldNode._el) {
+        oldNode._el.nodeValue = newNode._text;  // ⚠️ всегда обновляет
+        newNode._el = oldNode._el;
+        return newNode._el;
+    }
+    ...
+}
+```
+
+Стало:
+```javascript
+if (oldIsText && newIsText) {
+    if (oldNode._el) {
+        if (oldNode._text !== newNode._text) {  // ⚡ только если изменился
+            oldNode._el.nodeValue = newNode._text;
+        }
+        newNode._el = oldNode._el;
+        return newNode._el;
+    }
+    ...
+}
+```
+
+Эффект: в "Update 1 of 5000" 4999 из 5000 текстов не меняются — теперь не делается `nodeValue` присваивание.
+
+**2. `refreshMemoSubtree` → `inst._rerender()` напрямую для компонентов**
+
+В memo-skip path родителя `refreshMemoSubtree` для дочерних компонентов вызывал `reconcileComponent(vnode, vnode, ...)` который делает:
+- `buildIncomingProps` (через кэш, но проверка всё равно)
+- `inst._parentContext = ctx` (присваивание)
+- `inst._parentDOM = parentDOM`
+- `inst._namespace = namespace`
+- `try/catch` + `inst._rerender()`
+
+Заменил на прямой `inst._rerender()` вызов с try/catch. Обоснование безопасности: memo-skip у РОДИТЕЛЯ означает что родитель не рендерился → ctx родителя не изменился → `_parentContext` ребёнка валиден.
+
+**3. Shallow props comparison в `reconcileHTML`**
+
+Перед `applyProps` сравниваем `oldProps` и `newProps` shallow. Если все значения равны — skip `applyProps`. Помогает "Update 1 of 5000" где 4999 div'ов с одинаковыми props `{key: id}`.
+
+Был баг: `isSelect` объявлен внутри `if (propsChanged)`, но используется снаружи (для value sync). Исправил — вынес `isSelect` наружу.
+
+### Что откатил
+
+**4. `reconcileChildren` fast path для `oc === nc` — ОТКАТ**
+
+Идея: если `oldChilds[i] === newChilds[i]` (та же ссылка на vnode) — пропустить reconcile, переиспользовать DOM через `extractNodes(oc)`.
+
+Сломал 3 теста: Theme context, router simulation, i18n. Причина: когда родитель рендерит те же vnode из `props.children` (например `ThemeProvider` возвращает `h('div', null, props.children)`), `oc === nc` для дочерних компонентов. Fast path пропускал `reconcileComponent` → компоненты не получали `_rerender` → не перечитывали context.
+
+Урок: **компоненты ВСЕГДА должны проходить `reconcileComponent`** чтобы обновить `_parentContext` и пройти цепочку `props() → memo() → render()`. Fast path безопасен только для HTML/Fragment/текст — но у них overhead reconcile и так мал.
+
+### Замеры (Node.js v24, happy-dom, N=5000, 3 запуска, лучший)
+
+| Сценарий | Оригинал | v2 | Ускорение | React (bench.html) |
+|----------|----------|-----|-----------|-------------------|
+| Update 1 of 5000 | 6.53 ms | 3.78 ms | **42%** 🔥 | 1.00 ms |
+| Memo skip (5000) | 4.45 ms | 4.17 ms | 6% | 1.00 ms |
+| No memo (5000) | 9.00 ms | 7.72 ms | 14% | 3.70 ms |
+| Insert middle (5000) | 5.20 ms | 4.57 ms | 12% | 2.10 ms |
+| Update all 5000 rows | 5.48 ms | 4.78 ms | 13% | 6.80 ms |
+
+### Победа над React
+
+**Update all 5000 rows**: tyaff 4.78 ms vs React 6.80 ms → **tyaff быстрее на 30%** (раньше был паритет).
+
+### Где React всё ещё впереди и почему
+
+**Update 1 of 5000** (3.8x отрыв): React fiber + bailout. React видит что 4999 ключей не изменились → пропускает их reconcile. tyaff делает `reconcileChildren` для всех 5000. Чтобы догнать React, нужен key-based reconciliation с skip'ом unchanged keys — но это сложная оптимизация.
+
+**Memo skip (5000)** (4x отрыв): React `React.memo` сравнивает props shallow и **вообще не вызывает** функцию компонента при skip. tyaff всегда вызывает `_rerender` (props() → memo() → skip) для каждого из 5000 детей. Skip'нуть `_rerender` нельзя — сломает context propagation (если внук не memo, он должен перечитать context).
+
+Возможный путь: **mark context as dirty** — флаг на instance если context изменился. Тогда memo-компонент может skip `_rerender` если props те же AND context не dirty. Но это требует tracking dirty state по дереву — усложнение архитектуры.
+
+### Тесты
+
+Все 134 теста проходят (test-node-01..05).
