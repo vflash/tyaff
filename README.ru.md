@@ -1,3 +1,5 @@
+> **Note:** This is the original Russian version. The English translation is available in [README.md](README.md).
+
 <center>
   <img src="logo.svg" alt="Логотип" width="220">
 </center>

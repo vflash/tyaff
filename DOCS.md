@@ -1,29 +1,29 @@
-# Tyaff — документация
+# Tyaff — Documentation
 
-Легковесная VDOM библиотека для JavaScript с философией минимализма.
+A lightweight VDOM library for JavaScript with a philosophy of minimalism.
 
-## Содержание
+## Table of Contents
 
-- [Установка](#установка)
-- [Быстрый старт](#быстрый-старт)
-- [Компоненты](#компоненты)
-- [Props и children](#props-и-children)
-- [State и обновления](#state-и-обновления)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Components](#components)
+- [Props and children](#props-and-children)
+- [State and updates](#state-and-updates)
 - [Lifecycle](#lifecycle)
-- [memo() оптимизация](#memo-оптимизация)
+- [memo() optimization](#memo-optimization)
 - [Context](#context)
 - [Refs](#refs)
-- [Порталы](#порталы)
-- [Ключи (keys)](#ключи-keys)
-- [Атрибуты и события](#атрибуты-и-события)
-- [Формы](#формы)
-- [refresh() и global store](#refresh-и-global-store)
+- [Portals](#portals)
+- [Keys](#keys)
+- [Attributes and events](#attributes-and-events)
+- [Forms](#forms)
+- [refresh() and global store](#refresh-and-global-store)
 - [Production mode](#production-mode)
-- [Известные ограничения](#известные-ограничения)
+- [Known limitations](#known-limitations)
 
 ---
 
-## Установка
+## Installation
 
 ```bash
 npm install tyaff
@@ -35,21 +35,21 @@ import { h, Component, mount, refresh } from 'tyaff';
 
 ---
 
-## Быстрый старт
+## Quick Start
 
 ```javascript
 import { h, Component, mount } from 'tyaff';
 
 const Hello = Component({
     render() {
-        return h('h1', null, 'Привет, мир!');
+        return h('h1', null, 'Hello, World!');
     }
 });
 
 mount(Hello, document.getElementById('app'));
 ```
 
-**С компонентом с состоянием:**
+**With a stateful component:**
 
 ```javascript
 const Counter = Component({
@@ -61,7 +61,7 @@ const Counter = Component({
 
     render() {
         return h('div', null,
-            h('p', null, 'Счётчик: ' + this.count),
+            h('p', null, 'Counter: ' + this.count),
             h('button', { onClick: this.increment }, '+')
         );
     }
@@ -72,44 +72,44 @@ mount(Counter, document.getElementById('app'));
 
 ---
 
-## Компоненты
+## Components
 
-Компоненты создаются через фабрику `Component(definition)`:
+Components are created via the factory `Component(definition)`:
 
 ```javascript
 const MyComponent = Component({
-    // Начальные значения state
+    // Initial state values
     count: 0,
     items: [],
 
-    // Пользовательские методы (автоматически привязаны к instance)
+    // Custom methods (automatically bound to instance)
     increment() { this.count++; this.update(); },
 
-    // Lifecycle методы
-    init() { /* инициализация */ },
-    onMounted() { /* после вставки в DOM */ },
-    onUpdated() { /* после обновления */ },
-    onUnmounted() { /* перед удалением */ },
+    // Lifecycle methods
+    init() { /* initialization */ },
+    onMounted() { /* after DOM insertion */ },
+    onUpdated() { /* after update */ },
+    onUnmounted() { /* before removal */ },
 
-    // Обязательный метод
+    // Required method
     render() {
         return h('div', null, 'Content');
     }
 });
 ```
 
-**Важно:**
-- Нет отдельного понятия "state" — все переменные это свойства instance
-- Методы автоматически привязываются к `this`
-- Lifecycle методы не привязываются автоматически
+**Important:**
+- No separate "state" concept — all variables are instance properties
+- Methods are automatically bound to `this`
+- Lifecycle methods не привязываются автоматически
 
 ---
 
-## Props и children
+## Props and children
 
-### Props первым аргументом
+### Props as first argument
 
-Все ключевые функции получают `this.props` как первый аргумент:
+All key functions receive `this.props` as the first argument:
 
 ```javascript
 const Card = Component({
@@ -121,19 +121,19 @@ const Card = Component({
     }
 });
 
-// Использование
-h(Card, { title: 'Заголовок', text: 'Текст карточки' })
+// Usage
+h(Card, { title: 'Title', text: 'Card text' })
 ```
 
-### Нормализация props
+### Props normalization
 
-Опциональная функция `props()` позволяет трансформировать входящие данные:
+Optional `props()` function allows transforming incoming data:
 
 ```javascript
 const Button = Component({
     props(incoming) {
         return {
-            label: incoming.label || 'Нажми',
+            label: incoming.label || 'Click me',
             type: incoming.type || 'button',
             disabled: Boolean(incoming.disabled)
         };
@@ -147,7 +147,7 @@ const Button = Component({
 
 ### Children
 
-Дети передаются как `children` в props:
+Children are passed as `children` in props:
 
 ```javascript
 const Container = Component({
@@ -159,20 +159,20 @@ const Container = Component({
     }
 });
 
-// Использование
-h(Container, { title: 'Мой контейнер' },
-    h('p', null, 'Параграф 1'),
-    h('p', null, 'Параграф 2')
+// Usage
+h(Container, { title: 'My container' },
+    h('p', null, 'Paragraph 1'),
+    h('p', null, 'Paragraph 2')
 )
 ```
 
 ---
 
-## State и обновления
+## State and updates
 
-### Прямая мутация
+### Direct mutation
 
-Все переменные — мутабельные свойства на instance:
+All variables are mutable properties on the instance:
 
 ```javascript
 const Counter = Component({
@@ -180,9 +180,9 @@ const Counter = Component({
     items: [],
 
     add() {
-        this.items.push('Новый элемент');  // прямая мутация
+        this.items.push('New element');  // direct mutation
         this.count++;
-        this.update();  // уведомить о изменениях
+        this.update();  // notify about changes
     }
 });
 ```
@@ -190,63 +190,63 @@ const Counter = Component({
 ### update()
 
 ```javascript
-// Принудительное обновление
+// Forced update
 this.update();
 
-// С патчем
+// With patch
 this.update({ count: this.count + 1 });
 
-// Возвращает Promise<boolean>
+// Returns Promise<boolean>
 const changed = await this.update({ count: 10 });
 if (changed) {
-    console.log('Данные изменились');
+    console.log('Data has changed');
 }
 ```
 
-**После `await update()` визуал гарантированно актуален.**
+**After `await update()` the view is guaranteed to be up-to-date.**
 
-### Правила update()
+### rules update()
 
-| Вызов | Возвращает |
+| Call | Returns |
 |-------|-----------|
-| `update()` | `true` (принудительный render) |
-| `update({})` | `false` (пустой патч) |
-| `update(patch)` с изменениями | `true` |
-| `update(patch)` без изменений | `false` |
+| `update()` | `true` (forced render) |
+| `update({})` | `false` (empty patch) |
+| `update(patch)` with changes | `true` |
+| `update(patch)` without changes | `false` |
 
 ---
 
 ## Lifecycle
 
-### Порядок вызова при первом mount
+### Call order on first mount
 
-1. `props(incoming)` — нормализация props
-2. `init(props)` — инициализация state
-3. `memo(props)` — вычисление зависимостей
-4. `render(props)` — создание VDOM
-5. `onMounted()` — после вставки в DOM
+1. `props(incoming)` — props normalization
+2. `init(props)` — initialization state
+3. `memo(props)` — dependency computation
+4. `render(props)` — VDOM creation
+5. `onMounted()` — after DOM insertion
 
-### Порядок вызова при update
+### Call order on update
 
-1. `props(incoming)` — обновление props
-2. `memo(props)` — проверка зависимостей
-3. `render(props)` — создание VDOM (только если memo разрешил)
-4. `onUpdated()` — после обновления DOM
+1. `props(incoming)` — props update
+2. `memo(props)` — dependency check
+3. `render(props)` — VDOM creation (only if memo allowed)
+4. `onUpdated()` — after update DOM
 
-### Доступ к this
+### Access to this
 
-Все ключевые методы имеют доступ к instance:
+All key methods have access to the instance:
 
 ```javascript
 Component({
-    props(incoming) { /* this доступен */ },
-    init(props) { /* this доступен */ },
-    memo(props) { /* this доступен */ },
-    render(props) { /* this доступен */ }
+    props(incoming) { /* this is available */ },
+    init(props) { /* this is available */ },
+    memo(props) { /* this is available */ },
+    render(props) { /* this is available */ }
 });
 ```
 
-### Пример с lifecycle
+### Lifecycle example
 
 ```javascript
 const Timer = Component({
@@ -260,7 +260,7 @@ const Timer = Component({
     },
 
     onMounted() {
-        console.log('Компонент смонтирован');
+        console.log('Component mounted');
     },
 
     onUnmounted() {
@@ -268,23 +268,23 @@ const Timer = Component({
     },
 
     render() {
-        return h('div', null, 'Таймер: ' + this.count);
+        return h('div', null, 'Timer: ' + this.count);
     }
 });
 ```
 
 ---
 
-## memo() оптимизация
+## memo() optimization
 
-`memo()` блокирует render только для текущего компонента. Дети всегда проходят свою цепочку обновлений.
+`memo()` blocks render only for the current component. Children always go through their own update chain.
 
-### Базовое использование
+### Basic usage
 
 ```javascript
 const ExpensiveList = Component({
     memo(props) {
-        // render выполнится только при изменении items
+        // render will only execute when items changes
         return [props.items.length];
     },
 
@@ -296,14 +296,14 @@ const ExpensiveList = Component({
 });
 ```
 
-### С внутренним state
+### With internal state
 
 ```javascript
 const Counter = Component({
     count: 0,
 
     memo(props) {
-        // Зависимости от props и state
+        // Dependencies from props and state
         return [props.value, this.count];
     },
 
@@ -313,9 +313,9 @@ const Counter = Component({
 });
 ```
 
-### С context
+### With context
 
-Если компонент читает context и использует memo, включите context в зависимости:
+If a component reads context and uses memo, include context in dependencies:
 
 ```javascript
 const ThemedCard = Component({
@@ -331,15 +331,15 @@ const ThemedCard = Component({
 
 ### Важно
 
-`memo()` блокирует render **только для текущего компонента**. Дети всегда проходят свою цепочку `props → memo → render`, даже если родитель защищён memo().
+`memo()` blocks render **only for the current component**. Children always go through their own `props → memo → render`, even if the parent is protected by memo().
 
 ---
 
 ## Context
 
-Pull-based контекст без Provider/Consumer.
+Pull-based context without Provider/Consumer.
 
-### Создание провайдера
+### Creating a provider
 
 ```javascript
 const ThemeProvider = Component({
@@ -359,17 +359,17 @@ const ThemeProvider = Component({
 });
 ```
 
-### Использование context
+### Usage context
 
 ```javascript
 const ThemedButton = Component({
     render() {
         const theme = this.context('theme');
-        return h('button', { className: 'btn-' + theme }, 'Кнопка');
+        return h('button', { className: 'btn-' + theme }, 'Button');
     }
 });
 
-// Монтирование
+// Mounting
 mount(
     h(ThemeProvider, null,
         h(ThemedButton)
@@ -378,14 +378,14 @@ mount(
 );
 ```
 
-### Методы
+### Methods
 
-- `this.context(key)` — получить значение от родителя
-- `this.contextSelf(key)` — получить значение от себя или родителя
+- `this.context(key)` — get value from parent
+- `this.contextSelf(key)` — get value from self or parent
 
-### Переопределение context
+### Context override
 
-Дочерний компонент может переопределять context:
+A child component can override context:
 
 ```javascript
 const Page = Component({
@@ -403,9 +403,9 @@ const Page = Component({
 
 ## Refs
 
-`this.refs` — одновременно функция и объект.
+`this.refs` — both a function and an object.
 
-### Использование
+### Usage
 
 ```javascript
 const InputFocus = Component({
@@ -416,13 +416,13 @@ const InputFocus = Component({
     render() {
         return h('div', null,
             h('input', { ref: this.refs('input'), type: 'text' }),
-            h('button', { onClick: () => this.refs.input.select() }, 'Выделить')
+            h('button', { onClick: () => this.refs.input.select() }, 'Select')
         );
     }
 });
 ```
 
-### Ref на компонент
+### Ref to component
 
 ```javascript
 const Parent = Component({
@@ -436,17 +436,17 @@ const Parent = Component({
 });
 ```
 
-### Lifecycle refs
+### Ref lifecycle
 
-- **Mount:** `ref(node/instance)` вызывается
-- **Unmount:** `ref(null)` вызывается
-- **Update:** для HTML — вызывается снова; для компонентов — не вызывается
+- **Mount:** `ref(node/instance)` is called
+- **Unmount:** `ref(null)` is called
+- **Update:** для HTML — is called снова; для компонентов — не is called
 
 ---
 
-## Порталы
+## Portals
 
-Монтирование в произвольный DOM-контейнер.
+Mounting в произвольный DOM-контейнер.
 
 ```javascript
 const Modal = Component({
@@ -456,7 +456,7 @@ const Modal = Component({
         return createPortal(
             h('div', { className: 'modal' },
                 h('h2', null, this.props.title),
-                h('button', { onClick: this.props.onClose }, 'Закрыть')
+                h('button', { onClick: this.props.onClose }, 'Close')
             ),
             () => document.getElementById('modal-root')
         );
@@ -468,57 +468,57 @@ const Modal = Component({
 // <div id="modal-root"></div>
 ```
 
-### Отложенное монтирование
+### Deferred mounting
 
-Если контейнер ещё не существует, портал ожидает:
+If the container doesn't exist yet, the portal waits:
 
 ```javascript
 createPortal(
     children,
-    () => document.querySelector('.dynamic-container')  // может вернуть null
+    () => document.querySelector('.dynamic-container')  // may return null
 )
 ```
 
 ---
 
-## Ключи (keys)
+## Keys
 
-### Отличие от React
+### Difference from React
 
-В React ключ уникален среди братьев. В tyaff — **среди всех элементов в render**.
+In React, a key is unique among siblings. In tyaff — **among all elements in render**.
 
-Это позволяет перемещать элементы между разными родителями с сохранением instance и state.
+This allows moving elements between different parents while preserving instance and state.
 
-### Два типа ключей
+### Two types of keys
 
-**User key** (элемент с `key` prop):
+**User key** (element with `key` prop):
 ```javascript
-h(Component, { key: 'fio' }, ...)  // идентификатор: #fio
+h(Component, { key: 'fio' }, ...)  // identifier: #fio
 ```
 
-**Automatic key** (элемент без `key` prop):
-- Формируется на основе позиции в дереве
-- Элемент пересоздаётся при изменении порядка
+**Automatic key** (element without `key` prop):
+- Formed based on position in the tree
+- Element is recreated when order changes
 
-### Примеры
+### Examples
 
 ```javascript
-// Список с ключами
+// List with keys
 h('ul', null,
     items.map(item =>
         h('li', { key: item.id }, item.text)
     )
 )
 
-// Перемещение между родителями
+// Moving between parents
 h('div', null,
-    h(Component, { key: 'card' }, ...)  // можно переместить
+    h(Component, { key: 'card' }, ...)  // can be moved
 )
 ```
 
-### Fragment с key
+### Fragment with key
 
-Fragment с key позволяет перемещать группы детей:
+Fragment with key allows moving groups of children:
 
 ```javascript
 h(Fragment, { key: 'group-a' },
@@ -529,9 +529,9 @@ h(Fragment, { key: 'group-a' },
 
 ---
 
-## Атрибуты и события
+## Attributes and events
 
-### HTML атрибуты (camelCase → lowercase)
+### HTML attributes (camelCase → lowercase)
 
 ```javascript
 h('div', {
@@ -541,7 +541,7 @@ h('div', {
 })
 ```
 
-### События
+### Events
 
 ```javascript
 h('button', {
@@ -580,11 +580,11 @@ h('svg', {
 
 ---
 
-## Формы
+## Forms
 
-### Контролируемые поля
+### Controlled fields
 
-Используйте DOM property, а не атрибуты:
+Use DOM properties, not attributes:
 
 ```javascript
 const Form = Component({
@@ -630,20 +630,20 @@ h('select', {
 
 ---
 
-## refresh() и global store
+## refresh() and global store
 
 ### refresh()
 
-Глобальное обновление всех примонтированных деревьев:
+Global update of all mounted trees:
 
 ```javascript
-const time = await refresh();  // время в миллисекундах
+const time = await refresh();  // time in milliseconds
 console.log(`Render: ${time.toFixed(2)}ms`);
 ```
 
 ### Global Store Pattern
 
-Компоненты могут читать данные из глобального store:
+Components can read data from a global store:
 
 ```javascript
 // store.js
@@ -659,9 +659,9 @@ const Counter = Component({
     }
 });
 
-// Обновление
+// Update
 store.count = 55;
-await refresh();  // все компоненты перечитают store
+await refresh();  // all components will reread the store
 ```
 
 ---
@@ -670,7 +670,7 @@ await refresh();  // все компоненты перечитают store
 
 ### setDevMode()
 
-Переключение между development и production:
+Switching between development and production:
 
 ```javascript
 import { setDevMode } from 'tyaff';
@@ -680,82 +680,82 @@ if (process.env.NODE_ENV === 'production') {
 }
 ```
 
-**Development mode (по умолчанию):**
-- Проверка дубликатов ключей
-- Изоляция ошибок компонентов
-- Подробные сообщения
+**Development mode (default):**
+- Duplicate key checking
+- Component error isolation
+- Detailed messages
 
 **Production mode:**
-- Отключение проверок
-- Максимальная производительность
+- Disabling checks
+- Maximum performance
 
-**Важно:** В production ошибки в компонентах могут сломать весь batch обновлений.
+**Important:** In production, errors in components can break the entire update batch.
 
 ---
 
-## Известные ограничения
+## Known limitations
 
-### Условный рендер
+### Conditional rendering
 
 Используйте `&&` внутри обёртки:
 
 ```javascript
-// ✅ Правильно
+// ✅ Correct
 render() {
     return h('div', null,
         this.show && h('span', null, 'content')
     );
 }
 
-// ❌ Не рекомендуется
+// ❌ Not recommended
 render() {
     return this.show ? h('div', null, 'text') : null;
 }
 ```
 
-### Большие списки (>10K элементов)
+### Large lists (>10K elements)
 
-Используйте виртуализацию (рендер только видимых элементов).
+Use virtualization (render only visible elements).
 
-### Геттеры
+### Getters
 
-Геттеры из definition не копируются на instance. Используйте методы или вычисляйте в `render()`.
+Getters из definition не копируются на instance. Используйте методы или вычисляйте в `render()`.
 
 ---
 
 ## API Reference
 
-### Экспортируемые функции
+### Exported functions
 
 ```javascript
 export {
-    h,              // Создание VDOM узла
-    Component,      // Фабрика компонентов
-    createPortal,   // Создание портала
-    Fragment,       // Fragment символ
-    mount,          // Монтаж в DOM
-    refresh,        // Обновление всех компонентов
-    setDevMode      // Переключение dev/production режима
+    h,              // VDOM node creation
+    Component,      // Component factory
+    createPortal,   // Portal creation
+    Fragment,       // Fragment symbol
+    mount,          // Mount to DOM
+    refresh,        // Update всех компонентов
+    setDevMode      // Switch dev/production mode
 };
 ```
 
 ### h(type, props, ...children)
 
-Создание VDOM узла.
+VDOM node creation.
 
 ### Component(definition)
 
-Фабрика для создания компонентов.
+Factory for creating components.
 
 ### mount(input, container)
 
-Универсальная функция для mount, update и unmount.
+Universal function for mount, update, and unmount.
 
 ### refresh()
 
-Глобальное асинхронное обновление.
+Global asynchronous update.
 
 ### setDevMode(isDev)
 
-Переключение режима разработки.
+Switch development mode.
 

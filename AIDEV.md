@@ -273,6 +273,8 @@ AIDEV.md           — этот файл
 4. **Тесты защищают от регресса** — добавляй тесты для оптимизаций
 
 ### ✅ Сработавшие оптимизации
+
+**Раунд 1 (ранние):**
 - **escapeKey() с indexOf** — быстрая проверка на запятые (~2-3% прирост)
 - **Условный WeakSet в unmountVdom** — пропуск в production (~5ms прирост)
 - **Кэширование dom.tagName в applyProps** — меньше DOM API вызовов (~2-3% прирост)
@@ -281,12 +283,38 @@ AIDEV.md           — этот файл
 - **Кэш _nodes при передаче в reconcileChildren** — избегает O(n) обхода дерева
 - **Promise.resolve() в бенчмарках** — честное измерение без browser overhead
 
+**Раунд 2 (memo-skip path, 2026-06-30):**
+- **Text node skip if `_text` unchanged** — `nodeValue` обновляется только если текст изменился. -66% на Update 1 of 5000 (5.30→1.80ms)
+- **Shallow props comparison в reconcileHTML** — если oldProps и newProps shallow equal → skip applyProps. -62% на Swap first/last (5.50→2.10ms)
+- **refreshMemoSubtree → inst._rerender() напрямую** — в memo-skip path для дочерних компонентов пропускает reconcileComponent overhead
+- **Кэш _incomingProps в reconcileComponent** — переиспользование props вместо аллокации через buildIncomingProps
+- **Разделение shouldRender/memo-skip путей в _doRerender** — memo-skip не делает populateKeyMap, checkDuplicateKeys, keyMap.clear()
+
+**Победы над React (счёт 9:5 в пользу tyaff):**
+- Swap first/last: 16.5x быстрее React
+- Reverse 5000: 5.7x
+- Clear + remount: 3.4x
+- Move heavy: 2.7x
+- Move between parents: 2.0x
+- Update all rows: 1.3x (раньше был паритет)
+- Memo hit: 1.3x
+
 ### ❌ Откаченные оптимизации
+
+**Ранние:**
 - **Keyed reconciliation** — сломала тесты
 - **Dirty tracking** — смешанный эффект
 - **Итеративный collectDOMNodes** — медленнее рекурсии
-- **Props shallow equal в reconcileHTML** — не дало эффекта на Insert middle
+- **Props shallow equal в reconcileHTML** — не дало эффекта на Insert middle (позже реализована правильно в раунде 2)
 - **Проверка nextSibling в syncDOMChildren** — не дало эффекта
+
+**Раунд 2 (reconcileChildren fast path):**
+- **Fast path для `oc === nc` (та же ссылка на vnode)** — ломает context propagation. Когда родитель рендерит те же vnode из `props.children`, fast path пропускает `reconcileComponent` → дети не получают `_rerender` → context не перечитывается. Урок: компоненты ВСЕГДА должны проходить `reconcileComponent`.
+
+**Раунд 3 (leaf component optimization, 2026-06-30) — ОТКАТ:**
+- **Leaf detection через currentRenderingInstance в h()** — добавил overhead в каждый h() вызов (проверка type + children на компоненты/порталы). Для 5000 детей = 5000 проверок даже когда bailout не срабатывает. Regression: Update 1 of 5000 (1.80→2.90ms), Swap first/last (2.10→3.00ms), No memo (5.10→5.70ms), Insert middle (3.70→4.30ms).
+- **Shallow props bailout в reconcileComponent (без leaf detection)** — ломает context propagation. `newVnode.childs` не отражает детей из `render()` (они в `inst._vdom`). Без leaf detection bailout срабатывает для MemoWrapper и skip'ает `_rerender` → ThemeReader не перечитывает context.
+- **Итог:** overhead в hot path (`h()`) дороже выигрыша. Счёт vs React не изменился (9:5). Чистая потеря в 4 сценариях ради +3% в Memo skip.
 
 ### Типичные оптимизации VDOM
 - Быстрая проверка memo в update() без patch
@@ -336,6 +364,45 @@ AIDEV.md           — этот файл
 ### Ключевой инсайт
 **tyaff выигрывает** в массовых операциях (reverse, swap, update all) благодаря простому итеративному reconcile без fiber overhead.
 **React выигрывает** в точечных обновлениях благодаря fiber архитектуре с bailout и React.memo.
+
+---
+
+## 🏁 Уроки benchmark vs React (2026-06-30)
+
+После 3 раундов оптимизаций и замеров на bench.html:
+
+### Текущий счёт: tyaff 9 — React 5
+
+**tyaff побеждает:** Swap first/last (16.5x), Reverse (5.7x), Clear+remount (3.4x), Move heavy (2.7x), Move between parents (2.0x), Update all rows (1.3x), Memo hit (1.3x), Deep tree (1.1x), Mount rows (паритет).
+
+**React побеждает:** Update 1 of 5000 (1.8x), Memo skip (3.1x), No memo (1.4x), Insert middle (1.7x), Mount components (1.3x).
+
+### Ключевые уроки
+
+**1. Overhead в hot path (`h()`) — дорогой**
+Любая проверка в `h()` умножается на количество вызовов. Для 5000 детей = 5000 проверок. Даже простая `if (currentRenderingInstance)` даёт заметный regression. Оптимизации в `h()` применять только если выигрыш перекрывает overhead.
+
+**2. Leaf detection требует runtime tracking**
+Единственный способ безопасно определить leaf-компонент — runtime tracking через `currentRenderingInstance` в `h()`. Но tracking добавляет overhead (см. урок 1). Без tracking bailout небезопасен.
+
+**3. Shallow props bailout без leaf detection ломает context**
+`newVnode.childs` не отражает детей из `render()` (они в `inst._vdom`). Bailout "no children" проверяет только `newVnode.childs`, а не поддерево. Компонент с memo + без children в props + с детьми в render() → bailout skip'ает `_rerender` → дети не перечитывают context.
+
+**4. React.memo vs tyaff memo — фундаментальная разница**
+React `React.memo` **вообще не вызывает** функцию компонента при shallow props equal. tyaff всегда вызывает `_rerender → memo()` (props → memo → возможно render). Чтобы догнать React без overhead, нужен механизм который skip'ает `_rerender` БЕЗ runtime tracking — а это требует архитектурных изменений (dirty context flag, explicit opt-in через API, и т.д.).
+
+**5. Правильный подход к оптимизациям**
+- Замеряй до и после (browser bench.html + Node.js локально)
+- Проверяй что счёт vs React реально меняется, не только конкретный сценарий
+- Если overhead в hot path > выигрыш в одном сценарии — откатывай
+- SPEC важнее производительности — bailout без memo нарушает "props → memo → render" цепочку
+
+### Перспективные направления (на будущее)
+
+1. **Dirty context flag** — флаг на instance если context изменился. Memo-компонент может skip `_rerender` если props те же AND context не dirty. Требует tracking по дереву, но без overhead в `h()`.
+2. **Key-based reconciliation с skip unchanged keys** — для Update 1 of 5000. Если key + tag + props идентичны → skip reconcile. Потенциал 3x ускорения.
+3. **Оптимизация syncDOMChildren для insert-в-середину** — для Insert middle. Сейчас O(n) insertBefore.
+4. **Faster mount** — для Mount components. React быстрее на 1.3x. Можно посмотреть что в mountComponent тормозит.
 
 ---
 
