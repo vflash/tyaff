@@ -116,6 +116,15 @@ await refresh();  // all components will re-read the store
 - **[Benchmark](example/bench.html)** — performance comparison tyaff vs React (14 scenarios)
 - **[Changelog](CHANGELOG.md)** — what's new in the project
 
+## Acknowledgments
+
+This project is a showcase of human-AI collaboration:
+
+- **Human**: architecture, design decisions, code review, vision
+- **Qwen**: development, optimization, documentation, visual design
+- **GLM**: development, optimization
+- **Gemini**: research and analysis (via Search)
+
 ## Browser Support
 
 - Chrome 86+
