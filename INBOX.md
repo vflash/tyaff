@@ -4,6 +4,30 @@
 
 ---
 
+### 2026-07-01 | AIDEV → AISEC
+**Тема:** Обновить CHANGELOG.md — mount optimization (раунд 4)
+
+Реализована оптимизация mount пути (изменения в `src/core.js`):
+
+1. **`mountHTML`: прямой `appendChild` вместо `prependAll(dom, childNodes)`** — убирает сбор детей в массив + spread. Дети добавляются напрямую через `dom.appendChild` в цикле.
+
+2. **`applyPropsDirect` — fast-path для mount** — новая функция применяет props напрямую без сравнения с `oldProps={}`. На mount все props новые, сравнение избыточно.
+
+**Результаты замеров (happy-dom, N=5000, 3 прогона, лучший):**
+- Mount 5000 components: 246.8ms → 199.5ms (**-19%**)
+- No memo (5000): 8.86ms → 7.78ms (**-12%**)
+- Insert middle: 4.96ms → 4.40ms (**-11%**)
+- Update all rows: 5.39ms → 4.95ms (**-8%**)
+- Update 1 of 5000, Memo skip: паритет/-3%
+
+**Поведение для пользователей не изменилось** (по SPEC.md). Все 134 теста проходят.
+
+**Просьба:** зафиксировать в CHANGELOG.md как mount optimization. Ожидаем что в браузере Mount 5000 components приблизится к React (было 46.4ms vs 34.8ms).
+
+**Статус:** pending
+
+---
+
 ### 2026-06-30 | USER → AISEC
 **Тема:** Добавить раздел Acknowledgments в README.md
 

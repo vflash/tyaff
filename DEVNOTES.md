@@ -793,3 +793,92 @@ React быстрее на 1.3x в Mount 5000 components. Можно посмот
 ---
 
 *Последнее обновление: 2026-06-30 (раунд 2 оптимизаций активен, раунд 3 откатан)*
+---
+
+## Mount optimization: прямой appendChild + applyPropsDirect (2026-07-01)
+
+### Контекст
+
+Mount 5000 components: React 34.80ms, tyaff 46.40ms (1.3x отрыв). Цель — ускорить mount путь.
+
+### Анализ (микробенчмарк, happy-dom, N=5000)
+
+| Что | Время | Доля |
+|-----|-------|------|
+| Full mount (5000 components) | 246.8ms | 100% |
+| Mount 5000 div (без компонентов) | 156.7ms | 63% |
+| new Item() × 5000 (constructor) | 0.46ms | 0.2% |
+| h() × 5000 | 0.34ms | 0.1% |
+| vanilla DOM × 5000 | 94.5ms | 38% |
+
+**Вывод:** конструктор и h() — НЕ узкое место (0.3%). Основное время — DOM операции + reconcile.
+
+### Что изменилось
+
+**1. `mountHTML`: прямой `appendChild` вместо `prependAll(dom, childNodes)`**
+
+Было:
+```javascript
+const childNodes = [];
+for (let i = 0; i < vnode.childs.length; i++) {
+    const r = mountNode(vnode.childs[i], dom, ctx, childPath, keyMap, childNamespace);
+    pushAll(childNodes, r);
+}
+prependAll(dom, childNodes);  // O(n) spread
+```
+
+Стало:
+```javascript
+for (let i = 0; i < vnode.childs.length; i++) {
+    const r = mountNode(vnode.childs[i], dom, ctx, childPath, keyMap, childNamespace);
+    if (r == null) continue;
+    if (Array.isArray(r)) {
+        for (let j = 0; j < r.length; j++) if (r[j]) dom.appendChild(r[j]);
+    } else {
+        dom.appendChild(r);
+    }
+}
+```
+
+Убирает сбор в массив + `parent.prepend(...nodes)` spread.
+
+**2. `applyPropsDirect` — fast-path для mount**
+
+Новая функция применяет props напрямую без сравнения с `oldProps={}`:
+```javascript
+function applyPropsDirect(dom, props, namespace) {
+    // for...in по props, applyProp для каждого
+    // Skip value для form elements — применяется отдельно в конце mountHTML
+    // (select value нужно применять ПОСЛЕ mount children — нужны options)
+}
+```
+
+`applyProps(dom, {}, props)` делал `for...in` по `oldProps={}` (пусто) + `for...in` по `newProps` + сравнение `oldProps[k] !== newProps[k]`. На mount oldProps пустой — сравнение всегда "новое". `applyPropsDirect` пропускает эти проверки.
+
+### Баги которые поймал
+
+1. **select multiple value** — `applyPropsDirect` сначала skip'ал value для select, но value нужно применять ПОСЛЕ mount children (options). Решение: skip value в `applyPropsDirect`, применять в конце `mountHTML` как раньше.
+
+2. **select multiple attribute** — случайно skip'ал `multiple` для select в `applyPropsDirect`. `applyProp` для multiple делает `dom.multiple = !!value` — это безопасно, не нужно skip'ать. Убрал skip.
+
+### Замеры (happy-dom, N=5000, 3 прогона, лучший)
+
+| Что | Было (v2) | Стало (v4) | Эффект |
+|-----|-----------|------------|--------|
+| **Full mount (5000 components)** | 246.8ms | **199.5ms** | **-19%** ✅ |
+| Mount 5000 div (без компонентов) | 156.7ms | 148.6ms | -5% |
+| Update 1 of 5000 | 4.54ms | 4.53ms | паритет |
+| Memo skip (5000) | 4.52ms | 4.37ms | -3% |
+| No memo (5000) | 8.86ms | 7.78ms | **-12%** ✅ |
+| Insert middle | 4.96ms | 4.40ms | **-11%** ✅ |
+| Update all rows | 5.39ms | 4.95ms | **-8%** ✅ |
+
+No memo, Insert middle, Update all rows ускорились потому что `applyPropsDirect` и прямой `appendChild` работают не только на initial mount, но и при reconcil'е с новыми элементами.
+
+### Тесты
+
+Все 134 теста проходят (test-node-01..05).
+
+### Ожидание для браузера
+
+В браузере Mount 5000 components: 46.4ms → ~37ms (догнать React 34.8ms). Нужно подтвердить через bench.html.

@@ -36,17 +36,22 @@ function pushAll(target, source) {
     }
 }
 
-const PREPEND_CHUNK_SIZE = 20000;
+const APPEND_CHUNK_SIZE = 20000;
 
-function prependAll(parent, nodes) {
+// ⚡ appendChild вместо prepend — проще и быстрее (замеры показали)
+function appendAll(parent, nodes) {
     if (!nodes || nodes.length === 0) return;
-    if (nodes.length <= PREPEND_CHUNK_SIZE) {
-        parent.prepend(...nodes);
+    if (nodes.length <= APPEND_CHUNK_SIZE) {
+        for (let i = 0; i < nodes.length; i++) {
+            parent.appendChild(nodes[i]);
+        }
         return;
     }
-    for (let i = nodes.length; i > 0; i -= PREPEND_CHUNK_SIZE) {
-        const start = Math.max(0, i - PREPEND_CHUNK_SIZE);
-        parent.prepend(...nodes.slice(start, i));
+    for (let i = 0; i < nodes.length; i += APPEND_CHUNK_SIZE) {
+        const end = Math.min(nodes.length, i + APPEND_CHUNK_SIZE);
+        for (let j = i; j < end; j++) {
+            parent.appendChild(nodes[j]);
+        }
     }
 }
 
@@ -716,6 +721,32 @@ function applyProp(dom, key, value, namespace) {
     }
 }
 
+// ⚡ Fast-path для mount: применяет все props напрямую без сравнения
+// Используется в mountHTML где oldProps = {} (всё новое)
+// ВНИМАНИЕ: для SELECT value НЕ применяется здесь — options ещё не смонтированы.
+// Value для select применяется в конце mountHTML после mount children.
+function applyPropsDirect(dom, props, namespace) {
+    if (!props) return;
+    const isSVG = namespace === SVG_NS;
+    const tag = dom.tagName;
+    const isFormElement = !isSVG && (
+        tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    );
+    const isSelect = tag === 'SELECT';
+    for (const k in props) {
+        if (k === 'key' || k === 'ref' || k === 'children') continue;
+        // Skip value для form elements — применяется отдельно в конце
+        if (isFormElement && (k === 'value' || k === 'checked')) continue;
+        applyProp(dom, k, props[k], namespace);
+    }
+    // value/checked для INPUT/TEXTAREA — можно применять сразу (options не нужны)
+    // Для SELECT — НЕ применяем здесь, mountHTML применит после children
+    if (isFormElement && !isSelect) {
+        if ('value' in props) applyProp(dom, 'value', props.value, namespace);
+        if ('checked' in props) applyProp(dom, 'checked', props.checked, namespace);
+    }
+}
+
 function applyProps(dom, oldProps, newProps, namespace) {
     oldProps = oldProps || {};
     newProps = newProps || {};
@@ -1085,26 +1116,30 @@ function mountHTML(vnode, parentDOM, ctx, path, keyMap, namespace) {
 
     const isSelect = dom.tagName === 'SELECT';
 
-    if (isSelect) {
-        const propsWithoutValue = {};
-        for (const k in vnode.props) {
-            if (k !== 'value') propsWithoutValue[k] = vnode.props[k];
-        }
-        applyProps(dom, {}, propsWithoutValue, namespace);
-    } else {
-        applyProps(dom, {}, vnode.props, namespace);
-    }
+    // ⚡ Fast-path mount: применяем props напрямую без сравнения с {}
+    // Для SELECT value применяется ПОСЛЕ mount children (нужны options)
+    applyPropsDirect(dom, vnode.props, namespace);
 
     if (vnode.tag === 'textarea') return dom;
 
-    const childNodes = [];
+    // ⚡ Прямой appendChild вместо сбора в массив + appendAll(dom, childNodes)
+    // mountNode уже добавляет элементы в dom через appendChild внутри себя для HTML,
+    // но раньше мы собирали их в массив и потом prepend. Теперь mountHTML добавляет
+    // детей напрямую через dom.appendChild когда r — DOM-узел.
     const childNamespace = isForeignObject ? HTML_NS : namespace;
     for (let i = 0; i < vnode.childs.length; i++) {
         const childPath = path + ',' + i;
         const r = mountNode(vnode.childs[i], dom, ctx, childPath, keyMap, childNamespace);
-        pushAll(childNodes, r);
+        // r может быть: DOM-узел, массив DOM-узлов, null
+        if (r == null) continue;
+        if (Array.isArray(r)) {
+            for (let j = 0; j < r.length; j++) {
+                if (r[j]) dom.appendChild(r[j]);
+            }
+        } else {
+            dom.appendChild(r);
+        }
     }
-    prependAll(dom, childNodes);
 
     if (isSelect && vnode.props && 'value' in vnode.props) {
         applyProp(dom, 'value', vnode.props.value, namespace);
@@ -1447,7 +1482,7 @@ function mountPortal(vnode, parentDOM, ctx, path, keyMap, namespace) {
         inst._nodes = Array.isArray(childNodes)
             ? childNodes
             : (childNodes ? [childNodes] : []);
-        prependAll(container, inst._nodes);
+        appendAll(container, inst._nodes);
         callRefs(vnode.childs);
         triggerMounted(vnode.childs);
         inst._mounted = true;
@@ -1468,7 +1503,7 @@ function reconcilePortal(oldVnode, newVnode, parentDOM, ctx, path, keyMap, names
         inst._nodes = Array.isArray(childNodes)
             ? childNodes
             : (childNodes ? [childNodes] : []);
-        prependAll(container, inst._nodes);
+        appendAll(container, inst._nodes);
         callRefs(newVnode.childs);
         triggerMounted(newVnode.childs);
         inst._mounted = true;
@@ -1495,7 +1530,7 @@ function reconcilePortal(oldVnode, newVnode, parentDOM, ctx, path, keyMap, names
             inst._nodes = Array.isArray(childNodes)
                 ? childNodes
                 : (childNodes ? [childNodes] : []);
-            prependAll(container, inst._nodes);
+            appendAll(container, inst._nodes);
             callRefs(newVnode.childs);
             triggerMounted(newVnode.childs);
         } else {
@@ -1638,7 +1673,7 @@ function mount(input, container) {
 
     const nodes = mountNode(vnode, container, null, '', null, HTML_NS);
     const flat = Array.isArray(nodes) ? nodes : (nodes ? [nodes] : []);
-    prependAll(container, flat);
+    appendAll(container, flat);
 
     checkDuplicateKeys(vnode, '');
 
